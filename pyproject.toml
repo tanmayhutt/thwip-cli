@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "thwip"
+version = "1.0.0"
+description = "Universal coding agent multiplexer: detect, switch, and route between AI coding agents seamlessly"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "thwip contributors" },
+]
+keywords = ["ai", "coding-agent", "cli", "llm", "multiplexer"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "rich>=13.0",
+    "prompt-toolkit>=3.0",
+    "httpx>=0.27",
+    "openai>=1.50",
+    "anthropic>=0.40",
+    "google-genai>=1.0",
+    "tomli>=2.0;python_version<'3.11'",
+    "tomli-w>=1.0",
+    "click>=8.0",
+    "tenacity>=9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+all = [
+    "mistralai>=1.0",
+]
+
+[project.scripts]
+thwip = "thwip.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/thwip-cli/thwip"
+Repository = "https://github.com/thwip-cli/thwip"
+
+[tool.hatch.build.targets.wheel]
+packages = ["thwip"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

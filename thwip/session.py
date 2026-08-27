@@ -1,0 +1,175 @@
+"""
+Session & conversation state manager for thwip.
+
+Enables seamless context portability across agent switches without losing history.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from thwip.config import get_sessions_dir
+
+
+@dataclass
+class Message:
+    """A single message in the conversation history."""
+    role: str                       # "user" | "assistant" | "system" | "tool"
+    content: str
+    timestamp: float = field(default_factory=time.time)
+    agent_name: str = ""           # Which agent created this (e.g. "claude")
+    model: str = ""                # Which model (e.g. "claude-sonnet-4")
+    company: str = ""              # e.g. "Anthropic"
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    tokens: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Message":
+        return cls(**data)
+
+
+@dataclass
+class Session:
+    """A complete conversation session."""
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    name: str = "new-session"
+    project_path: str = "."
+    current_agent: str = "claude"
+    current_model: str = "claude-sonnet-4"
+    system_prompt: str = (
+        "You are an expert AI software engineer. You have tools to inspect files, "
+        "write code, run commands, and build software. Be concise, precise, and proactive."
+    )
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    messages: list[Message] = field(default_factory=list)
+
+    def add_user_message(self, content: str) -> Message:
+        msg = Message(role="user", content=content)
+        self.messages.append(msg)
+        self.updated_at = time.time()
+        return msg
+
+    def add_assistant_message(
+        self,
+        content: str,
+        agent_name: str,
+        model: str,
+        company: str = "",
+        tokens: int = 0,
+    ) -> Message:
+        msg = Message(
+            role="assistant",
+            content=content,
+            agent_name=agent_name,
+            model=model,
+            company=company,
+            tokens=tokens,
+        )
+        self.messages.append(msg)
+        self.updated_at = time.time()
+        return msg
+
+    def to_portable_messages(self) -> list[dict[str, Any]]:
+        """
+        Convert messages to clean LLM-compatible format:
+        [{"role": "user"|"assistant", "content": "..."}]
+        """
+        portable = []
+        for m in self.messages:
+            if m.role in ("user", "assistant"):
+                portable.append({"role": m.role, "content": m.content})
+        return portable
+
+    def switch_agent(self, agent_name: str, model: str) -> None:
+        """Switch current agent and model while preserving full history."""
+        self.current_agent = agent_name
+        self.current_model = model
+        self.updated_at = time.time()
+
+    def get_total_tokens(self) -> int:
+        return sum(m.tokens for m in self.messages)
+
+    def save(self, custom_name: str | None = None) -> Path:
+        """Save session to ~/.thwip/sessions/<id>.json."""
+        if custom_name:
+            self.name = custom_name
+        sessions_dir = get_sessions_dir()
+        file_path = sessions_dir / f"{self.name}.json"
+        data = {
+            "id": self.id,
+            "name": self.name,
+            "project_path": self.project_path,
+            "current_agent": self.current_agent,
+            "current_model": self.current_model,
+            "system_prompt": self.system_prompt,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "messages": [m.to_dict() for m in self.messages],
+        }
+        file_path.write_text(json.dumps(data, indent=2))
+        return file_path
+
+    @classmethod
+    def load(cls, name_or_id: str) -> "Session | None":
+        """Load session by name or id."""
+        sessions_dir = get_sessions_dir()
+        path = sessions_dir / f"{name_or_id}.json"
+        if not path.is_file():
+            # Try searching all sessions
+            for f in sessions_dir.glob("*.json"):
+                try:
+                    d = json.loads(f.read_text())
+                    if d.get("id") == name_or_id or d.get("name") == name_or_id:
+                        path = f
+                        break
+                except Exception:
+                    continue
+        if not path.is_file():
+            return None
+
+        try:
+            data = json.loads(path.read_text())
+            session = cls(
+                id=data.get("id", ""),
+                name=data.get("name", "saved-session"),
+                project_path=data.get("project_path", "."),
+                current_agent=data.get("current_agent", "claude"),
+                current_model=data.get("current_model", "claude-sonnet-4"),
+                system_prompt=data.get("system_prompt", ""),
+                created_at=data.get("created_at", time.time()),
+                updated_at=data.get("updated_at", time.time()),
+                messages=[Message.from_dict(m) for m in data.get("messages", [])],
+            )
+            return session
+        except Exception:
+            return None
+
+    @classmethod
+    def list_saved_sessions(cls) -> list[dict[str, Any]]:
+        """List all saved sessions with summary stats."""
+        sessions_dir = get_sessions_dir()
+        result = []
+        for f in sessions_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text())
+                result.append({
+                    "id": data.get("id"),
+                    "name": data.get("name", f.stem),
+                    "agent": data.get("current_agent"),
+                    "model": data.get("current_model"),
+                    "messages_count": len(data.get("messages", [])),
+                    "updated_at": datetime.fromtimestamp(data.get("updated_at", 0)).strftime("%Y-%m-%d %H:%M"),
+                })
+            except Exception:
+                continue
+        return sorted(result, key=lambda x: x["updated_at"], reverse=True)
