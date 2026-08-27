@@ -130,13 +130,13 @@ def render_startup_banner(
     agents_detected: int,
     agents_ready: int,
 ) -> Panel:
-    """Render the startup banner with current agent info."""
+    """Render the startup banner with current agent info and quick navigation tips."""
     brand = get_brand(company)
 
     lines = Text()
     lines.append("thwip", style="bold white")
-    lines.append(" v1.0\n", style="dim")
-    lines.append("Universal Coding Agent Multiplexer\n\n", style="dim italic")
+    lines.append(" v1.0.1", style="dim")
+    lines.append(" | Universal Coding Agent Multiplexer\n\n", style="dim")
     lines.append("  Agent:    ", style="dim")
     lines.append(f"{agent_name}", style=brand.label_style)
     lines.append(f" ({company})\n", style="dim")
@@ -150,10 +150,69 @@ def render_startup_banner(
     lines.append(f"{agents_detected}", style="bold white")
     lines.append(" detected, ", style="dim")
     lines.append(f"{agents_ready}", style="success")
-    lines.append(" ready", style="dim")
+    lines.append(" ready\n\n", style="dim")
+    lines.append("  Navigation: Type ", style="dim")
+    lines.append("/about", style="bold cyan")
+    lines.append(" for full guide, ", style="dim")
+    lines.append("/switch", style="bold cyan")
+    lines.append(" to change model, ", style="dim")
+    lines.append("/agents", style="bold cyan")
+    lines.append(" to list providers, ", style="dim")
+    lines.append("Ctrl+S", style="bold yellow")
+    lines.append(" for switcher.", style="dim")
 
     return Panel(
         lines,
+        border_style=brand.primary,
+        box=box.ROUNDED,
+        padding=(1, 2),
+    )
+
+
+def render_about_guide(
+    agents_detected: int = 0,
+    agents_ready: int = 0,
+    active_agent: str = "",
+    active_model: str = "",
+    active_company: str = "",
+) -> Panel:
+    """Render comprehensive about section and navigation guide."""
+    brand = get_brand(active_company)
+    content = Text()
+
+    content.append("thwip - Universal Coding Agent Multiplexer\n", style="bold white")
+    content.append("Combine, switch, and route across installed AI coding agents seamlessly.\n\n", style="dim")
+
+    content.append("HOW IT WORKS\n", style="bold cyan")
+    content.append("  1. Auto-Detection:   Scans environment variables, local CLI agents, and existing credentials\n", style="dim")
+    content.append("                       in ~/.claude.json, ~/.gemini/config.json, ~/.config/openai/, or Ollama.\n", style="dim")
+    content.append("  2. Unified State:    Maintains conversation history and tool outputs in a portable format.\n", style="dim")
+    content.append("  3. Hot-Swapping:     Switch models mid-conversation with zero context loss.\n", style="dim")
+    content.append("  4. Universal Tools:  Provides safe file editing, shell commands, execution, and git operations.\n", style="dim")
+    content.append("  5. Quota Failover:   Catches HTTP 429 errors and offers immediate one-key fallback switching.\n\n", style="dim")
+
+    content.append("NAVIGATION & COMMANDS\n", style="bold cyan")
+    content.append("  /switch <agent> [model]  Hot-swap active model mid-conversation (e.g. /switch google gemini-2.5-pro)\n", style="white")
+    content.append("  /agents                  List all discovered agents, status, and capabilities\n", style="white")
+    content.append("  /models [agent]          Show available models and context window limits\n", style="white")
+    content.append("  /limits                  View live token counts, cumulative costs, and quotas\n", style="white")
+    content.append("  /tools                   List all universal file, execution, and git tools\n", style="white")
+    content.append("  /session save <name>     Save current conversation to disk\n", style="white")
+    content.append("  /session load <name>     Restore and continue a saved session\n", style="white")
+    content.append("  /history                 View turn summary across models\n", style="white")
+    content.append("  /about or /guide         Display this navigation guide anytime\n", style="white")
+    content.append("  /clear                   Reset conversation memory\n", style="white")
+    content.append("  /exit or /quit           Exit the REPL\n\n", style="white")
+
+    content.append("KEYBOARD SHORTCUTS\n", style="bold cyan")
+    content.append("  Ctrl+S                   Interactive model switcher prompt\n", style="white")
+    content.append("  Ctrl+T                   Display current agent status and token counters\n", style="white")
+    content.append("  Ctrl+C                   Interrupt current response or tool execution\n", style="white")
+
+    return Panel(
+        content,
+        title="About & Navigation Guide",
+        title_align="left",
         border_style=brand.primary,
         box=box.ROUNDED,
         padding=(1, 2),

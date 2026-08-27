@@ -1021,8 +1021,8 @@ wheels = [
 ]
 
 [[package]]
-name = "thwip"
-version = "1.0.0"
+name = "thwip-cli"
+version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },

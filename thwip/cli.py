@@ -53,6 +53,7 @@ from thwip.theme import (
     print_info,
     print_success,
     print_warning,
+    render_about_guide,
     render_agent_badge,
     render_agents_table,
     render_capability_disclaimer,
@@ -182,6 +183,9 @@ class ThwipCLI:
         if cmd in ("/quit", "/exit", "/q"):
             return "QUIT"
 
+        elif cmd in ("/about", "/guide", "/info"):
+            self.cmd_show_about()
+
         elif cmd in ("/help", "/h"):
             self.show_help()
 
@@ -194,6 +198,9 @@ class ThwipCLI:
         elif cmd in ("/models", "/m"):
             self.cmd_show_models(arg1)
 
+        elif cmd == "/tools":
+            self.cmd_show_tools()
+
         elif cmd == "/status":
             self.cmd_show_status()
 
@@ -205,6 +212,10 @@ class ThwipCLI:
 
         elif cmd == "/history":
             self.cmd_show_history()
+
+        elif cmd in ("/clear", "/reset"):
+            self.session.messages.clear()
+            print_info("Conversation history cleared.")
 
         elif cmd == "/cost":
             self.cmd_show_cost()
@@ -236,9 +247,46 @@ class ThwipCLI:
                 print_info("Usage: /session [save|load|list|clear] [name]")
 
         else:
-            print_warning(f"Unknown command '{cmd}'. Type /help for available commands.")
+            print_warning(f"Unknown command '{cmd}'. Type /help or /about for navigation guide.")
 
         return None
+
+    def cmd_show_about(self) -> None:
+        """Display the complete About section and navigation guide."""
+        detected = len(self.detector.scan_all())
+        ready = len(self.registry.get_ready_agents())
+        console.print(
+            render_about_guide(
+                agents_detected=detected,
+                agents_ready=ready,
+                active_agent=self.current_agent.display_name,
+                active_model=self.session.current_model,
+                active_company=self.current_agent.company,
+            )
+        )
+
+    def cmd_show_tools(self) -> None:
+        """Display available universal tools."""
+        table = Table(title="Universal Tool Engine", box=box.ROUNDED)
+        table.add_column("Tool Name", style="bold white")
+        table.add_column("Category", style="cyan")
+        table.add_column("Description", style="white")
+        table.add_column("Status", style="green")
+
+        tools_info = [
+            ("read_file", "Filesystem", "Read file contents with line offset controls", "Active"),
+            ("edit_file", "Filesystem", "Structured string replacement in local files", "Active"),
+            ("write_file", "Filesystem", "Create or overwrite full files", "Active"),
+            ("list_dir", "Filesystem", "List directory tree and metadata", "Active"),
+            ("run_command", "Terminal", "Execute non-interactive shell commands safely", "Active"),
+            ("run_code", "Sandbox", "Run inline Python or Node.js code snippets", "Active"),
+            ("git_status", "Version Control", "Inspect repository changes and staging", "Active"),
+            ("git_diff", "Version Control", "View unified unstaged/staged diffs", "Active"),
+            ("git_commit", "Version Control", "Commit staged workspace changes", "Active"),
+        ]
+        for name, cat, desc, status in tools_info:
+            table.add_row(name, cat, desc, f"[bold green]{status}[/bold green]")
+        console.print(table)
 
     def show_help(self) -> None:
         """Show help information."""
@@ -247,22 +295,24 @@ class ThwipCLI:
         table.add_column("Description", style="white")
 
         commands = [
+            ("/about", "Display full About section, architecture, and navigation guide"),
             ("/switch [agent] [model]", "Switch active agent/model mid-conversation without losing context"),
             ("/agents", "Show all detected coding agents, company status & capabilities"),
             ("/models [agent]", "List available models for current or target agent"),
+            ("/tools", "List all universal file, terminal, and git tools"),
             ("/status", "Display current session, project, and token stats"),
             ("/limits", "View token usage, quota, and spend metrics"),
             ("/detect", "Re-scan system for newly installed coding agents"),
             ("/session save [name]", "Save current chat session"),
             ("/session load <name>", "Load a previously saved session"),
             ("/session list", "List all saved sessions"),
-            ("/session clear", "Clear current conversation memory"),
+            ("/clear", "Clear current conversation memory"),
             ("/history", "View conversation history with model attribution badges"),
             ("/cost", "Show estimated session and cumulative cost"),
             ("/project [path]", "View or change project working directory"),
-            ("Ctrl + S", "Quick switch prompt"),
-            ("Ctrl + T", "Status view"),
-            ("Ctrl + H", "Show conversation history"),
+            ("Ctrl + S", "Interactive agent/model switcher prompt"),
+            ("Ctrl + T", "Status view and token counters"),
+            ("Ctrl + C", "Interrupt active response or tool execution"),
             ("/quit", "Exit thwip"),
         ]
         for c, d in commands:
