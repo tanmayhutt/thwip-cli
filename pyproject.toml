@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "thwip"
+name = "thwip-cli"
 version = "1.0.0"
 description = "Universal coding agent multiplexer: detect, switch, and route between AI coding agents seamlessly"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
-    { name = "thwip contributors" },
+    { name = "Tanmay", email = "tanmay@users.noreply.github.com" },
 ]
 keywords = ["ai", "coding-agent", "cli", "llm", "multiplexer"]
 classifiers = [
@@ -50,8 +50,8 @@ all = [
 thwip = "thwip.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/thwip-cli/thwip"
-Repository = "https://github.com/thwip-cli/thwip"
+Homepage = "https://github.com/tanmayhutt/thwip-cli"
+Repository = "https://github.com/tanmayhutt/thwip-cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["thwip"]
