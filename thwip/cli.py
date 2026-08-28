@@ -195,8 +195,11 @@ class ThwipCLI:
         elif cmd in ("/agents", "/list"):
             self.cmd_show_agents()
 
+        elif cmd in ("/key", "/auth", "/config"):
+            self.cmd_auth_config(arg1, arg2)
+
         elif cmd in ("/models", "/m"):
-            self.cmd_show_models(arg1)
+            self.cmd_show_models(arg1, arg2)
 
         elif cmd == "/tools":
             self.cmd_show_tools()
@@ -298,7 +301,8 @@ class ThwipCLI:
             ("/about", "Display full About section, architecture, and navigation guide"),
             ("/switch [agent] [model]", "Switch active agent/model mid-conversation without losing context"),
             ("/agents", "Show all detected coding agents, company status & capabilities"),
-            ("/models [agent]", "List available models for current or target agent"),
+            ("/models [agent|tier]", "List models filtered by provider or tier (flagship, balanced, fast)"),
+            ("/key [provider] [key]", "View or configure API keys saved in ~/.thwip/config.toml"),
             ("/tools", "List all universal file, terminal, and git tools"),
             ("/status", "Display current session, project, and token stats"),
             ("/limits", "View token usage, quota, and spend metrics"),
@@ -397,33 +401,142 @@ class ThwipCLI:
         rows = [a.to_table_row() for a in self.registry.list_agents()]
         console.print(render_agents_table(rows))
 
-    def cmd_show_models(self, agent_name: str = "") -> None:
-        """List models for current or target agent."""
-        target = self.registry.get_agent(agent_name) if agent_name else self.current_agent
-        if not target:
-            print_error(f"Agent '{agent_name}' not found.")
+    def cmd_show_models(self, arg1: str = "", arg2: str = "") -> None:
+        """List models by provider or tier (flagship, balanced, fast)."""
+        tier_filter = ""
+        agent_target = None
+
+        tier_aliases = {
+            "flagship": "flagship",
+            "high": "flagship",
+            "pro": "flagship",
+            "balanced": "balanced",
+            "mid": "balanced",
+            "flash": "balanced",
+            "fast": "fast",
+            "low": "fast",
+            "lite": "fast",
+            "mini": "fast",
+        }
+
+        if arg1.lower() in tier_aliases:
+            tier_filter = tier_aliases[arg1.lower()]
+        elif arg1:
+            agent_target = self.registry.get_agent(arg1)
+            if not agent_target:
+                print_error(f"Agent '{arg1}' not found.")
+                return
+            if arg2.lower() in tier_aliases:
+                tier_filter = tier_aliases[arg2.lower()]
+
+        if not agent_target and not tier_filter:
+            agent_target = self.current_agent
+
+        if agent_target:
+            agents_to_show = [agent_target]
+            title = f"Available Models for {agent_target.display_name}"
+            if tier_filter:
+                title += f" ({tier_filter.title()} Tier)"
+        else:
+            agents_to_show = self.registry.list_agents()
+            title = f"All {tier_filter.title()} Tier Models Across Providers"
+
+        table = Table(title=title, box=box.ROUNDED)
+        if not agent_target:
+            table.add_column("Provider", style="cyan")
+        table.add_column("Model ID", style="bold white")
+        table.add_column("Name", style="white")
+        table.add_column("Tier", style="bold")
+        table.add_column("Context", style="dim")
+        table.add_column("Thinking", style="magenta")
+        table.add_column("Price (In/Out 1M)", style="green")
+
+        tier_styles = {
+            "flagship": "[bold magenta]Flagship / High[/bold magenta]",
+            "balanced": "[bold cyan]Balanced / Mid[/bold cyan]",
+            "fast": "[bold green]Fast / Low[/bold green]",
+        }
+
+        for ag in agents_to_show:
+            for m in ag.available_models:
+                m_tier = getattr(m, "tier", "balanced")
+                if tier_filter and m_tier != tier_filter:
+                    continue
+
+                ctx = f"{m.context_window:,}" if m.context_window else "-"
+                price = f"${m.pricing_input} / ${m.pricing_output}" if m.pricing_input else "Free"
+                tier_badge = tier_styles.get(m_tier, m_tier.title())
+                def_mark = " [dim](default)[/dim]" if m.is_default else ""
+
+                row = []
+                if not agent_target:
+                    row.append(ag.company)
+                row.extend([
+                    m.id + def_mark,
+                    m.name,
+                    tier_badge,
+                    ctx,
+                    "yes" if m.supports_thinking else "-",
+                    price,
+                ])
+                table.add_row(*row)
+
+        console.print(table)
+        console.print("[dim]Filter by tier: [bold]/models flagship[/bold], [bold]/models balanced[/bold], [bold]/models fast[/bold][/dim]\n")
+
+    def cmd_auth_config(self, provider: str = "", key: str = "") -> None:
+        """View or set API credentials stored in ~/.thwip/config.toml."""
+        provider_map = {
+            "google": "google",
+            "gemini": "google",
+            "antigravity": "google",
+            "openai": "openai",
+            "chatgpt": "openai",
+            "codex": "openai",
+            "claude": "anthropic",
+            "anthropic": "anthropic",
+            "deepseek": "deepseek",
+            "groq": "groq",
+            "openrouter": "openrouter",
+        }
+
+        if provider and key:
+            target_prov = provider_map.get(provider.lower(), provider.lower())
+            self.config.keys[target_prov] = key
+            self.config.key_sources[target_prov] = "config.toml"
+            self.config.save()
+
+            # Refresh agent registry
+            self.registry = AgentRegistry(self.config)
+            agent = self.registry.get_agent(self.session.current_agent)
+            if agent:
+                self.current_agent = agent
+            print_success(f"API key for '{target_prov}' saved to ~/.thwip/config.toml")
             return
 
-        table = Table(title=f"Available Models for {target.display_name}", box=box.ROUNDED)
-        table.add_column("Model ID", style="bold white")
-        table.add_column("Name", style="cyan")
-        table.add_column("Context", style="white")
-        table.add_column("Tools", style="green")
-        table.add_column("Thinking", style="magenta")
-        table.add_column("Price (In/Out per 1M)", style="dim")
+        # Show interactive auth overview
+        table = Table(title="thwip API Credentials & Authentication", box=box.ROUNDED)
+        table.add_column("Provider", style="bold white")
+        table.add_column("Auth Status", style="white")
+        table.add_column("Key Source", style="dim")
+        table.add_column("Config Command", style="cyan")
 
-        for m in target.available_models:
-            ctx = f"{m.context_window:,}" if m.context_window else "-"
-            price = f"${m.pricing_input} / ${m.pricing_output}" if m.pricing_input else "Free / Local"
-            table.add_row(
-                m.id + (" (default)" if m.is_default else ""),
-                m.name,
-                ctx,
-                "yes" if m.supports_tools else "-",
-                "yes" if m.supports_thinking else "-",
-                price,
-            )
+        for prov, label in [
+            ("google", "Google Gemini / Antigravity"),
+            ("openai", "OpenAI / ChatGPT / Codex"),
+            ("anthropic", "Anthropic Claude"),
+            ("deepseek", "DeepSeek"),
+            ("groq", "Groq"),
+            ("openrouter", "OpenRouter"),
+        ]:
+            has_key = bool(self.config.keys.get(prov))
+            source = self.config.key_sources.get(prov, "none")
+            status = "[bold green]Configured[/bold green]" if has_key else "[bold yellow]Missing[/bold yellow]"
+            cmd_hint = f"/key {prov} <your_api_key>"
+            table.add_row(label, status, source, cmd_hint)
+
         console.print(table)
+        console.print("[dim]To set a key: [bold white]/key <provider> <key>[/bold white] (e.g. /key google AIzaSy...)[/dim]\n")
 
     def cmd_show_status(self) -> None:
         """Display status."""

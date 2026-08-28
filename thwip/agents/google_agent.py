@@ -59,6 +59,8 @@ class GoogleAgent(BaseAgent):
         ModelInfo(
             id="gemini-2.5-pro",
             name="Gemini 2.5 Pro",
+            tier="flagship",
+            description="Flagship multimodal model with 1M context and advanced reasoning",
             context_window=1_048_576,
             max_output=65_536,
             supports_tools=True,
@@ -72,6 +74,8 @@ class GoogleAgent(BaseAgent):
         ModelInfo(
             id="gemini-2.5-flash",
             name="Gemini 2.5 Flash",
+            tier="balanced",
+            description="High-speed balanced model optimized for daily coding workflows",
             context_window=1_048_576,
             max_output=65_536,
             supports_tools=True,
@@ -80,6 +84,20 @@ class GoogleAgent(BaseAgent):
             supports_thinking=True,
             pricing_input=0.15,
             pricing_output=0.60,
+        ),
+        ModelInfo(
+            id="gemini-2.5-flash-lite",
+            name="Gemini 2.5 Flash Lite",
+            tier="fast",
+            description="Ultra lightweight and cost-effective model for rapid tasks",
+            context_window=1_048_576,
+            max_output=65_536,
+            supports_tools=True,
+            supports_streaming=True,
+            supports_vision=False,
+            supports_thinking=False,
+            pricing_input=0.075,
+            pricing_output=0.30,
         ),
     ]
 
@@ -171,7 +189,7 @@ class GoogleAgent(BaseAgent):
                     pass
                 break
 
-        # Also check for Antigravity IDE or Gemini app (macOS app)
+        # Check for Antigravity IDE or Gemini app (macOS app)
         if not info["path"]:
             app_paths = [
                 Path("/Applications/Antigravity IDE.app"),
@@ -186,6 +204,17 @@ class GoogleAgent(BaseAgent):
                     info["path"] = str(app)
                     info["version"] = "Installed"
                     break
+
+        # Check for Google Account in ~/.gemini/google_accounts.json
+        acc_file = Path.home() / ".gemini" / "google_accounts.json"
+        if acc_file.is_file():
+            try:
+                acc_data = json.loads(acc_file.read_text())
+                account = acc_data.get("active") or (acc_data.get("old") and acc_data["old"][0]) or ""
+                if account:
+                    info["account"] = account
+            except Exception:
+                pass
 
         return info
 

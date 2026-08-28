@@ -158,6 +158,8 @@ class ModelInfo:
     """Information about a specific model."""
     id: str                     # "claude-sonnet-4"
     name: str                   # "Claude Sonnet 4"
+    tier: str = "balanced"      # "flagship" (high), "balanced" (mid), "fast" (low-cost)
+    description: str = ""       # e.g. "Flagship reasoning with 1M context"
     context_window: int = 0     # Max tokens
     max_output: int = 0         # Max output tokens
     supports_tools: bool = True

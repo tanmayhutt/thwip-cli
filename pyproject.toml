@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "thwip-cli"
-version = "1.0.2"
+version = "1.0.3"
 description = "Universal coding agent multiplexer: detect, switch, and route between AI coding agents seamlessly"
 readme = "README.md"
 license = "MIT"

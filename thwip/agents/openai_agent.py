@@ -40,9 +40,9 @@ class OpenAIAgent(BaseAgent):
     """
 
     name = "openai"
-    display_name = "Codex / OpenAI"
+    display_name = "ChatGPT / Codex"
     company = "OpenAI"
-    description = "OpenAI's coding agent with sandboxed code execution"
+    description = "OpenAI's ChatGPT and Codex models with tool execution"
     website = "https://platform.openai.com"
 
     capabilities = {
@@ -59,6 +59,8 @@ class OpenAIAgent(BaseAgent):
         ModelInfo(
             id="gpt-4.1",
             name="GPT-4.1",
+            tier="flagship",
+            description="Next-generation flagship with 1M context and advanced coding",
             context_window=1_047_576,
             max_output=32_768,
             supports_tools=True,
@@ -71,6 +73,8 @@ class OpenAIAgent(BaseAgent):
         ModelInfo(
             id="o3",
             name="O3",
+            tier="flagship",
+            description="Deep reasoning model with autonomous multi-step problem solving",
             context_window=200_000,
             max_output=100_000,
             supports_tools=True,
@@ -80,19 +84,10 @@ class OpenAIAgent(BaseAgent):
             pricing_output=8.0,
         ),
         ModelInfo(
-            id="o4-mini",
-            name="O4 Mini",
-            context_window=200_000,
-            max_output=100_000,
-            supports_tools=True,
-            supports_streaming=True,
-            supports_thinking=True,
-            pricing_input=1.10,
-            pricing_output=4.40,
-        ),
-        ModelInfo(
             id="gpt-4o",
             name="GPT-4o",
+            tier="balanced",
+            description="High-speed multimodal flagship for omni-modal coding and vision",
             context_window=128_000,
             max_output=16_384,
             supports_tools=True,
@@ -102,8 +97,36 @@ class OpenAIAgent(BaseAgent):
             pricing_output=10.0,
         ),
         ModelInfo(
+            id="o4-mini",
+            name="O4 Mini",
+            tier="balanced",
+            description="Fast and affordable reasoning model for everyday programming",
+            context_window=200_000,
+            max_output=100_000,
+            supports_tools=True,
+            supports_streaming=True,
+            supports_thinking=True,
+            pricing_input=1.10,
+            pricing_output=4.40,
+        ),
+        ModelInfo(
+            id="gpt-4o-mini",
+            name="GPT-4o Mini",
+            tier="fast",
+            description="Lightweight and low-latency model for fast script tasks",
+            context_window=128_000,
+            max_output=16_384,
+            supports_tools=True,
+            supports_streaming=True,
+            supports_vision=True,
+            pricing_input=0.15,
+            pricing_output=0.60,
+        ),
+        ModelInfo(
             id="codex-mini",
             name="Codex Mini",
+            tier="fast",
+            description="Specialized fast code generation model",
             context_window=200_000,
             max_output=16_384,
             supports_tools=True,

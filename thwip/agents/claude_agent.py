@@ -59,6 +59,8 @@ class ClaudeAgent(BaseAgent):
         ModelInfo(
             id="claude-sonnet-4",
             name="Claude Sonnet 4",
+            tier="flagship",
+            description="Flagship coding intelligence with hybrid thinking and tool precision",
             context_window=200_000,
             max_output=16_384,
             supports_tools=True,
@@ -72,6 +74,8 @@ class ClaudeAgent(BaseAgent):
         ModelInfo(
             id="claude-opus-4",
             name="Claude Opus 4",
+            tier="flagship",
+            description="Ultra high capability reasoning for complex systems engineering",
             context_window=200_000,
             max_output=32_000,
             supports_tools=True,
@@ -84,6 +88,8 @@ class ClaudeAgent(BaseAgent):
         ModelInfo(
             id="claude-haiku-3.5",
             name="Claude Haiku 3.5",
+            tier="fast",
+            description="Fastest lightweight Claude model for rapid iteration",
             context_window=200_000,
             max_output=8_192,
             supports_tools=True,
