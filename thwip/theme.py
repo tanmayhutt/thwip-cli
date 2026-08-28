@@ -16,6 +16,8 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 from rich.markdown import Markdown
+
+from thwip import __version__
 from rich.syntax import Syntax
 from rich import box
 
@@ -151,7 +153,7 @@ def render_startup_banner(
     lines.append("╚═╝   ╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝╚═╝     \n\n", style="dim")
 
     lines.append("  Universal Coding Agent Multiplexer", style="bold white")
-    lines.append("  v1.0.2\n\n", style="dim")
+    lines.append(f"  v{__version__}\n\n", style="dim")
     lines.append("  Agent:       ", style="dim")
     lines.append(f"{agent_name}", style=brand.label_style)
     lines.append(f" ({company})\n", style="dim")
@@ -163,7 +165,7 @@ def render_startup_banner(
     lines.append(f"{session_name}\n", style="white")
     lines.append("  Environment: ", style="dim")
     lines.append(f"{agents_detected}", style="bold white")
-    lines.append(" tools detected, ", style="dim")
+    lines.append(" agents installed, ", style="dim")
     lines.append(f"{agents_ready}", style="success")
     lines.append(" ready\n\n", style="dim")
     lines.append("  Quickstart:  Type ", style="dim")

@@ -155,7 +155,11 @@ class ClaudeAgent(BaseAgent):
     # --- Detection ---
 
     def is_installed(self) -> bool:
-        """Check if Claude Code CLI or Claude desktop app is installed or configured."""
+        """Check if Claude Code CLI or Claude desktop app is installed.
+
+        The ~/.claude directory alone is not sufficient since other IDEs
+        (like Antigravity) may create it.
+        """
         if self.is_configured():
             return True
         if shutil.which("claude") is not None:
@@ -163,13 +167,50 @@ class ClaudeAgent(BaseAgent):
         app_paths = [
             Path("/Applications/Claude.app"),
             Path.home() / "Applications" / "Claude.app",
-            Path.home() / ".claude",
         ]
         return any(p.exists() for p in app_paths)
 
+    def _has_cli_auth(self) -> dict[str, str] | None:
+        """Check for Claude Code subscription auth.
+
+        Requires the `claude` CLI binary or Claude.app to be present.
+        The ~/.claude directory alone is not sufficient since other IDEs
+        (like Antigravity) may create it.
+        """
+        has_cli = shutil.which("claude") is not None
+        has_app = Path("/Applications/Claude.app").exists() or (Path.home() / "Applications" / "Claude.app").exists()
+
+        if not has_cli and not has_app:
+            return None
+
+        claude_dir = Path.home() / ".claude"
+        if not claude_dir.is_dir():
+            return None
+
+        # Claude Code stores session data when authenticated
+        auth_indicators = [
+            claude_dir / "projects",
+            claude_dir / "backups",
+            claude_dir / "debug",
+        ]
+        has_sessions = any(p.is_dir() and any(p.iterdir()) for p in auth_indicators if p.exists())
+
+        if has_sessions:
+            return {"method": "subscription", "account": "Anthropic Max"}
+
+        return None
+
+    @property
+    def auth_method(self) -> str:
+        if self._get_api_key():
+            return "api_key"
+        if self._has_cli_auth():
+            return "subscription"
+        return "none"
+
     def is_configured(self) -> bool:
-        """Check if we have a valid Anthropic API key."""
-        return bool(self._get_api_key())
+        """Check if we have a valid API key or subscription auth."""
+        return bool(self._get_api_key()) or bool(self._has_cli_auth())
 
     def get_install_info(self) -> dict[str, str]:
         """Get Claude Code installation details."""
@@ -198,7 +239,6 @@ class ClaudeAgent(BaseAgent):
             app_paths = [
                 Path("/Applications/Claude.app"),
                 Path.home() / "Applications" / "Claude.app",
-                Path.home() / ".claude",
             ]
             for app in app_paths:
                 if app.exists():
@@ -213,29 +253,35 @@ class ClaudeAgent(BaseAgent):
     def get_subscription_info(self) -> SubscriptionInfo:
         """
         Determine subscription status.
-        We can't fully detect tier without an API call, but we can infer from
-        the key prefix and check basic validity.
+        Checks API key first, then CLI subscription auth.
         """
         key = self._get_api_key()
-        if not key:
+        if key:
+            if key.startswith("sk-ant-"):
+                return SubscriptionInfo(
+                    tier=SubscriptionTier.PRO,
+                    is_active=True,
+                    message="Anthropic API key detected",
+                )
             return SubscriptionInfo(
                 tier=SubscriptionTier.UNKNOWN,
-                is_active=False,
-                message="No API key found",
-            )
-
-        # Anthropic keys start with "sk-ant-"
-        if key.startswith("sk-ant-"):
-            return SubscriptionInfo(
-                tier=SubscriptionTier.PRO,  # Assume pro if they have a key
                 is_active=True,
                 message="API key detected",
             )
 
+        cli_auth = self._has_cli_auth()
+        if cli_auth:
+            account = cli_auth.get("account", "Active")
+            return SubscriptionInfo(
+                tier=SubscriptionTier.PRO,
+                is_active=True,
+                message=f"Claude Code ({account})",
+            )
+
         return SubscriptionInfo(
             tier=SubscriptionTier.UNKNOWN,
-            is_active=True,
-            message="API key format not recognized, but may work",
+            is_active=False,
+            message="No credentials found",
         )
 
     # --- Chat ---

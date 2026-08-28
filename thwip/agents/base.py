@@ -210,8 +210,21 @@ class BaseAgent(ABC):
 
     @abstractmethod
     def is_configured(self) -> bool:
-        """Check if this agent has a valid API key / credentials."""
+        """Check if this agent has a valid API key or OAuth/subscription credentials."""
         ...
+
+    def _has_cli_auth(self) -> dict[str, str] | None:
+        """
+        Check if the agent's CLI tool has its own OAuth/subscription auth.
+        Returns dict with 'method' and 'account' keys if found, else None.
+        Subclasses should override this.
+        """
+        return None
+
+    @property
+    def auth_method(self) -> str:
+        """Return the auth method in use: 'api_key', 'oauth', 'subscription', or 'none'."""
+        return "none"
 
     @abstractmethod
     def get_install_info(self) -> dict[str, str]:
@@ -304,6 +317,15 @@ class BaseAgent(ABC):
             return ("Not Installed", "dim")
         if not self.is_configured():
             return ("Installed (No Key)", "status.limited")
+
+        # Show auth method in status for non-API-key auth
+        auth = self.auth_method
+        if auth in ("oauth", "subscription"):
+            cli_auth = self._has_cli_auth()
+            account = cli_auth.get("account", "") if cli_auth else ""
+            if account:
+                return (f"Ready ({account})", "status.ready")
+            return ("Ready (CLI Auth)", "status.ready")
 
         limit = self.check_limits()
         if limit == LimitStatus.OK:

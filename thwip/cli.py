@@ -107,6 +107,8 @@ class ThwipCLI:
         """Main async REPL loop."""
         # 1. Detect agents on system
         detected = self.detector.scan_all()
+        all_agents = self.registry.list_agents()
+        installed_count = len([a for a in all_agents if a.is_installed()])
         ready_count = len(self.registry.get_ready_agents())
 
         # 2. Display startup banner
@@ -118,7 +120,7 @@ class ThwipCLI:
                 model=self.session.current_model,
                 project_path=os.path.abspath(self.session.project_path),
                 session_name=self.session.name,
-                agents_detected=len(detected),
+                agents_detected=installed_count,
                 agents_ready=ready_count,
             )
         )
@@ -326,15 +328,19 @@ class ThwipCLI:
     async def cmd_switch(self, agent_name: str, model_id: str = "") -> None:
         """Switch to a different agent and/or model."""
         if not agent_name:
-            agents = self.registry.list_agents()
+            all_agents = self.registry.list_agents()
+            installed = [a for a in all_agents if a.is_installed()]
+
+            if not installed:
+                print_error("No agents detected on your machine.")
+                return
+
             console.print("\n[bold white]Available Coding Agents on Your Machine:[/bold white]")
 
-            # Group: Ready / Configured
-            ready_agents = [a for a in agents if a.is_configured()]
-            installed_agents = [a for a in agents if a.is_installed() and not a.is_configured()]
-            other_agents = [a for a in agents if not a.is_installed()]
-
-            ordered = ready_agents + installed_agents + other_agents
+            # Sort: configured first, then just installed
+            ready_agents = [a for a in installed if a.is_configured()]
+            unready_agents = [a for a in installed if not a.is_configured()]
+            ordered = ready_agents + unready_agents
 
             for i, a in enumerate(ordered, 1):
                 brand = get_brand(a.company)
@@ -347,10 +353,14 @@ class ThwipCLI:
                     f"({a.company}) - [{status_style}][{status_str}][/{status_style}][dim]{loc}[/dim]"
                 )
 
+            not_installed = len(all_agents) - len(installed)
+            if not_installed > 0:
+                console.print(f"\n  [dim]{not_installed} other providers available (DeepSeek, Groq, Ollama, OpenRouter). Use /agents to see all.[/dim]")
+
             choice = input(f"\nEnter choice [1-{len(ordered)}]: ").strip()
             if choice.isdigit() and 1 <= int(choice) <= len(ordered):
                 agent_name = ordered[int(choice) - 1].name
-            elif choice.lower() in [a.name for a in agents]:
+            elif choice.lower() in [a.name for a in installed]:
                 agent_name = choice.lower()
             else:
                 print_warning("Switch cancelled.")

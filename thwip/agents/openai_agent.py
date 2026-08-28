@@ -193,8 +193,47 @@ class OpenAIAgent(BaseAgent):
         ]
         return any(p.exists() for p in app_paths)
 
+    def _has_cli_auth(self) -> dict[str, str] | None:
+        """Check for ChatGPT OAuth via Codex CLI's auth.json."""
+        auth_file = Path.home() / ".codex" / "auth.json"
+        if auth_file.is_file():
+            try:
+                data = json.loads(auth_file.read_text())
+                if data.get("auth_mode") == "chatgpt" and data.get("tokens"):
+                    tokens = data["tokens"]
+                    result: dict[str, str] = {"method": "chatgpt_oauth"}
+                    # Decode plan info from JWT id_token claims (no verification)
+                    id_token = tokens.get("id_token", "")
+                    if id_token:
+                        try:
+                            import base64
+                            parts = id_token.split(".")
+                            if len(parts) >= 2:
+                                payload = parts[1]
+                                padding = 4 - len(payload) % 4
+                                if padding != 4:
+                                    payload += "=" * padding
+                                claims = json.loads(base64.urlsafe_b64decode(payload))
+                                result["account"] = claims.get("email", "")
+                                auth_info = claims.get("https://api.openai.com/auth", {})
+                                result["plan"] = auth_info.get("chatgpt_plan_type", "")
+                        except Exception:
+                            pass
+                    return result
+            except Exception:
+                pass
+        return None
+
+    @property
+    def auth_method(self) -> str:
+        if self._get_api_key():
+            return "api_key"
+        if self._has_cli_auth():
+            return "subscription"
+        return "none"
+
     def is_configured(self) -> bool:
-        return bool(self._get_api_key())
+        return bool(self._get_api_key()) or bool(self._has_cli_auth())
 
     def get_install_info(self) -> dict[str, str]:
         info: dict[str, str] = {"method": "not installed", "path": "", "version": ""}
@@ -233,24 +272,44 @@ class OpenAIAgent(BaseAgent):
 
     def get_subscription_info(self) -> SubscriptionInfo:
         key = self._get_api_key()
-        if not key:
+        if key:
+            if key.startswith("sk-"):
+                return SubscriptionInfo(
+                    tier=SubscriptionTier.PRO,
+                    is_active=True,
+                    message="OpenAI API key detected",
+                )
             return SubscriptionInfo(
                 tier=SubscriptionTier.UNKNOWN,
-                is_active=False,
-                message="No API key found",
+                is_active=True,
+                message="API key detected",
             )
 
-        if key.startswith("sk-"):
+        cli_auth = self._has_cli_auth()
+        if cli_auth:
+            plan = cli_auth.get("plan", "")
+            account = cli_auth.get("account", "")
+            tier_map = {
+                "plus": SubscriptionTier.PRO,
+                "pro": SubscriptionTier.PRO,
+                "team": SubscriptionTier.TEAM,
+                "enterprise": SubscriptionTier.ENTERPRISE,
+            }
+            tier = tier_map.get(plan, SubscriptionTier.UNKNOWN)
+            plan_label = plan.title() if plan else "Active"
+            msg = f"ChatGPT {plan_label}"
+            if account:
+                msg += f" ({account})"
             return SubscriptionInfo(
-                tier=SubscriptionTier.PRO,
+                tier=tier,
                 is_active=True,
-                message="OpenAI API key detected",
+                message=msg,
             )
 
         return SubscriptionInfo(
             tier=SubscriptionTier.UNKNOWN,
-            is_active=True,
-            message="API key detected",
+            is_active=False,
+            message="No credentials found",
         )
 
     # --- Chat ---

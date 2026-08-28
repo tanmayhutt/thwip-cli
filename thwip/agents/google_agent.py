@@ -167,8 +167,31 @@ class GoogleAgent(BaseAgent):
         ]
         return any(p.exists() for p in app_paths)
 
+    def _has_cli_auth(self) -> dict[str, str] | None:
+        """Check for Google OAuth via Gemini CLI's google_accounts.json."""
+        acc_file = Path.home() / ".gemini" / "google_accounts.json"
+        if acc_file.is_file():
+            try:
+                data = json.loads(acc_file.read_text())
+                account = data.get("active") or ""
+                if not account and data.get("old"):
+                    account = data["old"][0]
+                if account:
+                    return {"method": "google_oauth", "account": account}
+            except Exception:
+                pass
+        return None
+
+    @property
+    def auth_method(self) -> str:
+        if self._get_api_key():
+            return "api_key"
+        if self._has_cli_auth():
+            return "oauth"
+        return "none"
+
     def is_configured(self) -> bool:
-        return bool(self._get_api_key())
+        return bool(self._get_api_key()) or bool(self._has_cli_auth())
 
     def get_install_info(self) -> dict[str, str]:
         info: dict[str, str] = {"method": "not installed", "path": "", "version": ""}
@@ -220,25 +243,32 @@ class GoogleAgent(BaseAgent):
 
     def get_subscription_info(self) -> SubscriptionInfo:
         key = self._get_api_key()
-        if not key:
+        if key:
+            if key.startswith("AIza"):
+                return SubscriptionInfo(
+                    tier=SubscriptionTier.FREE,
+                    is_active=True,
+                    message="Google API key detected",
+                )
             return SubscriptionInfo(
                 tier=SubscriptionTier.UNKNOWN,
-                is_active=False,
-                message="No API key found",
+                is_active=True,
+                message="API key detected",
             )
 
-        # Google Gemini API keys typically start with "AIza"
-        if key.startswith("AIza"):
+        cli_auth = self._has_cli_auth()
+        if cli_auth:
+            account = cli_auth.get("account", "")
             return SubscriptionInfo(
-                tier=SubscriptionTier.FREE,  # Free tier by default
+                tier=SubscriptionTier.PRO,
                 is_active=True,
-                message="Google API key detected",
+                message=f"Google OAuth ({account})" if account else "Google OAuth active",
             )
 
         return SubscriptionInfo(
             tier=SubscriptionTier.UNKNOWN,
-            is_active=True,
-            message="API key detected",
+            is_active=False,
+            message="No credentials found",
         )
 
     # --- Chat ---
