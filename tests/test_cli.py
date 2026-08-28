@@ -29,6 +29,9 @@ class ToolCallingAgent:
     def __init__(self):
         self.calls = []
 
+    def is_configured(self):
+        return True
+
     def has_capability(self, capability):
         return capability in self.capabilities
 
@@ -60,3 +63,25 @@ async def test_tool_results_are_returned_to_agent(tmp_path):
 
     assert len(cli.current_agent.calls) == 2
     assert cli.session.messages[-1].content == "Used the tool result."
+
+
+class UnconfiguredAgent(ToolCallingAgent):
+    def is_configured(self):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_agent_shows_setup_guidance(tmp_path):
+    cli = ThwipCLI.__new__(ThwipCLI)
+    cli.config = SimpleNamespace(stream=True, confirm_tools=True)
+    cli.session = Session(current_agent="fake", current_model="fake-model")
+    cli.current_agent = UnconfiguredAgent()
+    cli.tool_manager = ToolManager(tmp_path)
+    cli.usage_tracker = FakeUsageTracker()
+
+    await cli.process_user_message("Hello")
+
+    # Should not invoke chat and should not leave unhandled user message
+    assert len(cli.current_agent.calls) == 0
+    assert len(cli.session.messages) == 0
+

@@ -104,11 +104,15 @@ class OpenRouterAgent(BaseAgent):
 
     def _ensure_client(self) -> Any:
         if self._client is None:
+            key = self._get_api_key()
+            if not key:
+                raise RuntimeError(
+                    "OpenRouter API key not found. Set OPENROUTER_API_KEY or run /key openrouter to configure."
+                )
             try:
                 from openai import AsyncOpenAI
-                key = self._get_api_key()
                 self._client = AsyncOpenAI(
-                    api_key=key or "dummy",
+                    api_key=key,
                     base_url="https://openrouter.ai/api/v1",
                     default_headers={
                         "HTTP-Referer": "https://github.com/tanmayhutt/thwip-cli",

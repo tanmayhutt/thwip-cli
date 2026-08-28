@@ -134,13 +134,14 @@ class GoogleAgent(BaseAgent):
 
     def _ensure_client(self) -> Any:
         if self._client is None:
+            key = self._get_api_key()
+            if not key:
+                raise RuntimeError(
+                    "Google Gemini API key not found. Set GEMINI_API_KEY or run /key google to configure."
+                )
             try:
                 from google import genai
-                key = self._get_api_key()
-                if key:
-                    self._client = genai.Client(api_key=key)
-                else:
-                    self._client = genai.Client()
+                self._client = genai.Client(api_key=key)
             except ImportError:
                 raise RuntimeError(
                     "google-genai package not installed. Run: pip install google-genai"

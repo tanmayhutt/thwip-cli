@@ -88,11 +88,15 @@ class GroqAgent(BaseAgent):
 
     def _ensure_client(self) -> Any:
         if self._client is None:
+            key = self._get_api_key()
+            if not key:
+                raise RuntimeError(
+                    "Groq API key not found. Set GROQ_API_KEY or run /key groq to configure."
+                )
             try:
                 from openai import AsyncOpenAI
-                key = self._get_api_key()
                 self._client = AsyncOpenAI(
-                    api_key=key or "dummy",
+                    api_key=key,
                     base_url="https://api.groq.com/openai/v1",
                 )
             except ImportError:

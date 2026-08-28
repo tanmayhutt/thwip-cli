@@ -185,7 +185,7 @@ class ThwipCLI:
         if cmd in ("/quit", "/exit", "/q"):
             return "QUIT"
 
-        elif cmd in ("/about", "/guide", "/info"):
+        elif cmd in ("/about", "/guide", "/info", "/g"):
             self.cmd_show_about()
 
         elif cmd in ("/help", "/h"):
@@ -194,16 +194,16 @@ class ThwipCLI:
         elif cmd in ("/switch", "/s"):
             await self.cmd_switch(arg1, arg2)
 
-        elif cmd in ("/agents", "/list"):
+        elif cmd in ("/agents", "/list", "/a"):
             self.cmd_show_agents()
 
-        elif cmd in ("/key", "/auth", "/config"):
+        elif cmd in ("/key", "/auth", "/config", "/k"):
             self.cmd_auth_config(arg1, arg2)
 
         elif cmd in ("/models", "/m"):
             self.cmd_show_models(arg1, arg2)
 
-        elif cmd == "/tools":
+        elif cmd in ("/tools", "/t"):
             self.cmd_show_tools()
 
         elif cmd == "/status":
@@ -511,37 +511,34 @@ class ThwipCLI:
     def cmd_auth_config(self, provider: str = "", key: str = "") -> None:
         """View or set API credentials stored in ~/.thwip/config.toml."""
         provider_map = {
+            "1": "google",
             "google": "google",
             "gemini": "google",
             "antigravity": "google",
+            "2": "openai",
             "openai": "openai",
             "chatgpt": "openai",
             "codex": "openai",
+            "3": "anthropic",
             "claude": "anthropic",
             "anthropic": "anthropic",
+            "4": "deepseek",
             "deepseek": "deepseek",
+            "5": "groq",
             "groq": "groq",
+            "6": "openrouter",
             "openrouter": "openrouter",
         }
 
-        if key:
-            print_error("Do not put API keys directly in commands because prompt history may retain them. Use /key <provider>.")
-            return
-
-        if provider:
+        # Case 1: Direct key provided in command (/key google <key>)
+        if provider and key:
             target_prov = provider_map.get(provider.lower(), provider.lower())
             if target_prov not in set(provider_map.values()):
                 print_error(f"Unknown provider '{provider}'.")
                 return
-            secret = getpass.getpass(f"API key for {target_prov}: ").strip()
-            if not secret:
-                print_warning("No key entered. Configuration unchanged.")
-                return
-            self.config.keys[target_prov] = secret
+            self.config.keys[target_prov] = key.strip()
             self.config.key_sources[target_prov] = "config.toml"
             self.config.save()
-
-            # Refresh agent registry
             self.registry = AgentRegistry(self.config)
             agent = self.registry.get_agent(self.session.current_agent)
             if agent:
@@ -549,29 +546,78 @@ class ThwipCLI:
             print_success(f"API key for '{target_prov}' saved to ~/.thwip/config.toml")
             return
 
-        # Show interactive auth overview
-        table = Table(title="thwip API Credentials & Authentication", box=box.ROUNDED)
-        table.add_column("Provider", style="bold white")
-        table.add_column("Auth Status", style="white")
-        table.add_column("Key Source", style="dim")
-        table.add_column("Config Command", style="cyan")
+        # Case 2: Provider specified without key (/key google)
+        if provider:
+            target_prov = provider_map.get(provider.lower(), provider.lower())
+            if target_prov not in set(provider_map.values()):
+                print_error(f"Unknown provider '{provider}'.")
+                return
+            try:
+                secret = getpass.getpass(f"Enter API key for {target_prov} (input hidden): ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print_warning("\nCancelled.")
+                return
+            if not secret:
+                print_warning("No key entered. Configuration unchanged.")
+                return
+            self.config.keys[target_prov] = secret
+            self.config.key_sources[target_prov] = "config.toml"
+            self.config.save()
+            self.registry = AgentRegistry(self.config)
+            agent = self.registry.get_agent(self.session.current_agent)
+            if agent:
+                self.current_agent = agent
+            print_success(f"API key for '{target_prov}' saved to ~/.thwip/config.toml")
+            return
 
-        for prov, label in [
-            ("google", "Google Gemini / Antigravity"),
-            ("openai", "OpenAI / ChatGPT / Codex"),
-            ("anthropic", "Anthropic Claude"),
-            ("deepseek", "DeepSeek"),
-            ("groq", "Groq"),
-            ("openrouter", "OpenRouter"),
-        ]:
+        # Case 3: Interactive auth table with picker
+        table = Table(title="thwip API Credentials & Authentication", box=box.ROUNDED)
+        table.add_column("#", style="bold cyan")
+        table.add_column("Provider", style="bold white")
+        table.add_column("Status", style="white")
+        table.add_column("Source", style="dim")
+        table.add_column("Env Variable", style="dim")
+
+        providers_order = [
+            ("1", "google", "Google Gemini / Antigravity", "GEMINI_API_KEY"),
+            ("2", "openai", "OpenAI / ChatGPT / Codex", "OPENAI_API_KEY"),
+            ("3", "anthropic", "Anthropic Claude", "ANTHROPIC_API_KEY"),
+            ("4", "deepseek", "DeepSeek", "DEEPSEEK_API_KEY"),
+            ("5", "groq", "Groq", "GROQ_API_KEY"),
+            ("6", "openrouter", "OpenRouter", "OPENROUTER_API_KEY"),
+        ]
+
+        for num, prov, label, env_name in providers_order:
             has_key = bool(self.config.keys.get(prov))
             source = self.config.key_sources.get(prov, "none")
             status = "[bold green]Configured[/bold green]" if has_key else "[bold yellow]Missing[/bold yellow]"
-            cmd_hint = f"/key {prov} <your_api_key>"
-            table.add_row(label, status, source, cmd_hint)
+            table.add_row(num, label, status, source, env_name)
 
         console.print(table)
-        console.print("[dim]To set a key securely: [bold white]/key <provider>[/bold white][/dim]\n")
+        console.print("[dim]Commands: [bold white]/key <provider> <key>[/bold white] or [bold white]/key <provider>[/bold white][/dim]")
+
+        try:
+            choice = input("\nEnter choice [1-6] to configure (or press Enter to return): ").strip()
+            if not choice:
+                return
+            target_prov = provider_map.get(choice.lower())
+            if not target_prov:
+                print_warning("Configuration cancelled.")
+                return
+            secret = getpass.getpass(f"Enter API key for {target_prov} (input hidden): ").strip()
+            if not secret:
+                print_warning("No key entered. Configuration unchanged.")
+                return
+            self.config.keys[target_prov] = secret
+            self.config.key_sources[target_prov] = "config.toml"
+            self.config.save()
+            self.registry = AgentRegistry(self.config)
+            agent = self.registry.get_agent(self.session.current_agent)
+            if agent:
+                self.current_agent = agent
+            print_success(f"API key for '{target_prov}' saved to ~/.thwip/config.toml")
+        except (KeyboardInterrupt, EOFError):
+            print_warning("\nCancelled.")
 
     def cmd_show_status(self) -> None:
         """Display status."""
@@ -678,6 +724,32 @@ class ThwipCLI:
 
     async def process_user_message(self, text: str) -> None:
         """Send message to active agent, handle streaming, tool calls, and limits."""
+        if not self.current_agent.is_configured():
+            key_name = {
+                "google": "GEMINI_API_KEY",
+                "openai": "OPENAI_API_KEY",
+                "claude": "ANTHROPIC_API_KEY",
+                "deepseek": "DEEPSEEK_API_KEY",
+                "groq": "GROQ_API_KEY",
+                "openrouter": "OPENROUTER_API_KEY",
+            }.get(self.current_agent.name, "API_KEY")
+
+            console.print(
+                Panel(
+                    Text.from_markup(
+                        f"[bold yellow]Missing API Key for {self.current_agent.display_name}[/bold yellow]\n\n"
+                        f"An API key is required to send requests to [bold]{self.session.current_model}[/bold].\n\n"
+                        f"  • Configure key now:   [bold cyan]/key {self.current_agent.name}[/bold cyan]\n"
+                        f"  • Or set in shell:     [bold white]export {key_name}=your_key_here[/bold white]\n"
+                        f"  • Or switch agent:     [bold cyan]/switch[/bold cyan]"
+                    ),
+                    title="Setup Required",
+                    border_style="yellow",
+                    box=box.ROUNDED,
+                )
+            )
+            return
+
         self.session.add_user_message(text)
         working_messages = self.session.to_portable_messages()
 

@@ -149,13 +149,14 @@ class ClaudeAgent(BaseAgent):
     def _ensure_client(self) -> Any:
         """Lazily initialize the Anthropic client."""
         if self._client is None:
+            key = self._get_api_key()
+            if not key:
+                raise RuntimeError(
+                    "Anthropic Claude API key not found. Set ANTHROPIC_API_KEY or run /key claude to configure."
+                )
             try:
                 import anthropic
-                key = self._get_api_key()
-                if key:
-                    self._client = anthropic.AsyncAnthropic(api_key=key)
-                else:
-                    self._client = anthropic.AsyncAnthropic()  # Will use env var
+                self._client = anthropic.AsyncAnthropic(api_key=key)
             except ImportError:
                 raise RuntimeError(
                     "anthropic package not installed. Run: pip install anthropic"

@@ -131,10 +131,14 @@ class OpenAIAgent(BaseAgent):
 
     def _ensure_client(self) -> Any:
         if self._client is None:
+            key = self._get_api_key()
+            if not key:
+                raise RuntimeError(
+                    "OpenAI API key not found. Set OPENAI_API_KEY or run /key openai to configure."
+                )
             try:
                 from openai import AsyncOpenAI
-                key = self._get_api_key()
-                self._client = AsyncOpenAI(api_key=key) if key else AsyncOpenAI()
+                self._client = AsyncOpenAI(api_key=key)
             except ImportError:
                 raise RuntimeError(
                     "openai package not installed. Run: pip install openai"
