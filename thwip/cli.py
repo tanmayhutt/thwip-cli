@@ -530,20 +530,9 @@ class ThwipCLI:
             "openrouter": "openrouter",
         }
 
-        # Case 1: Direct key provided in command (/key google <key>)
+        # Reject inline secrets because shell and terminal history may retain them.
         if provider and key:
-            target_prov = provider_map.get(provider.lower(), provider.lower())
-            if target_prov not in set(provider_map.values()):
-                print_error(f"Unknown provider '{provider}'.")
-                return
-            self.config.keys[target_prov] = key.strip()
-            self.config.key_sources[target_prov] = "config.toml"
-            self.config.save()
-            self.registry = AgentRegistry(self.config)
-            agent = self.registry.get_agent(self.session.current_agent)
-            if agent:
-                self.current_agent = agent
-            print_success(f"API key for '{target_prov}' saved to ~/.thwip/config.toml")
+            print_error("Do not put API keys directly in commands. Use /key <provider> for hidden input.")
             return
 
         # Case 2: Provider specified without key (/key google)
@@ -594,7 +583,7 @@ class ThwipCLI:
             table.add_row(num, label, status, source, env_name)
 
         console.print(table)
-        console.print("[dim]Commands: [bold white]/key <provider> <key>[/bold white] or [bold white]/key <provider>[/bold white][/dim]")
+        console.print("[dim]Configure securely with [bold white]/key <provider>[/bold white] or choose a number below.[/dim]")
 
         try:
             choice = input("\nEnter choice [1-6] to configure (or press Enter to return): ").strip()

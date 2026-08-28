@@ -85,3 +85,12 @@ async def test_unconfigured_agent_shows_setup_guidance(tmp_path):
     assert len(cli.current_agent.calls) == 0
     assert len(cli.session.messages) == 0
 
+
+def test_inline_api_key_is_rejected():
+    cli = ThwipCLI.__new__(ThwipCLI)
+    cli.config = SimpleNamespace(keys={}, key_sources={}, save=lambda: None)
+
+    cli.cmd_auth_config("openai", "secret-value")
+
+    assert cli.config.keys == {}
+    assert cli.config.key_sources == {}
