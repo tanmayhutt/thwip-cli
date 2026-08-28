@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import json
 import shutil
-import urllib.request
 import urllib.error
-from typing import Any, AsyncIterator
+import urllib.request
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -47,6 +48,8 @@ class OllamaAgent(BaseAgent):
         Capability.FILE_EDIT,
         Capability.FILE_READ,
         Capability.CODE_RUN,
+        Capability.TERMINAL,
+        Capability.GIT,
     }
 
     def __init__(self, host: str = "http://localhost:11434") -> None:
@@ -140,6 +143,8 @@ class OllamaAgent(BaseAgent):
             "messages": formatted_messages,
             "stream": stream,
         }
+        if tools:
+            payload["tools"] = tools
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             if stream:
@@ -158,6 +163,13 @@ class OllamaAgent(BaseAgent):
                             content = msg.get("content", "")
                             if content:
                                 yield TextDelta(content=content)
+                            for call in msg.get("tool_calls", []):
+                                function = call.get("function", {})
+                                yield ToolUseStart(
+                                    tool_id=call.get("id", function.get("name", "tool")),
+                                    tool_name=function.get("name", ""),
+                                    args=function.get("arguments", {}),
+                                )
                             if data.get("done"):
                                 prompt_eval = data.get("prompt_eval_count", 0)
                                 eval_count = data.get("eval_count", 0)
@@ -173,7 +185,16 @@ class OllamaAgent(BaseAgent):
                 resp = await client.post(f"{self.host}/api/chat", json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
-                    yield TextDelta(content=data.get("message", {}).get("content", ""))
+                    message = data.get("message", {})
+                    if message.get("content"):
+                        yield TextDelta(content=message["content"])
+                    for call in message.get("tool_calls", []):
+                        function = call.get("function", {})
+                        yield ToolUseStart(
+                            tool_id=call.get("id", function.get("name", "tool")),
+                            tool_name=function.get("name", ""),
+                            args=function.get("arguments", {}),
+                        )
                     yield AgentDone()
 
     def check_limits(self) -> LimitStatus:

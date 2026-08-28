@@ -23,11 +23,17 @@
 
 ### 1. Installation
 
-Install in editable mode or via pip:
+Install the published package:
 
 ```bash
-git clone https://github.com/thwip-cli/thwip.git
-cd thwip
+pip install --upgrade thwip-cli
+```
+
+Or install the repository in editable mode for development:
+
+```bash
+git clone https://github.com/tanmayhutt/thwip-cli.git
+cd thwip-cli
 pip install -e .
 ```
 
@@ -48,6 +54,7 @@ thwip
 | `/switch [agent] [model]` | Switch active agent or model mid-conversation |
 | `/agents` | Show all detected coding agents, company status, and capabilities |
 | `/models [agent]` | List available models for current or target agent |
+| `/key [provider]` | Enter an API key securely without placing it in prompt history |
 | `/status` | Display current session, project, and token stats |
 | `/limits` | View token usage, quota, and spend metrics |
 | `/detect` | Re-scan system for newly installed coding agents |
@@ -69,9 +76,9 @@ thwip
 
 | Company | Agent | Capabilities |
 |:---|:---|:---|
-| Anthropic | Claude Code (Sonnet, Opus, Haiku) | Chat, File Edit, Code Run, Terminal, Git, Search |
-| Google | Antigravity / Gemini CLI (2.5 Pro, 2.5 Flash) | Chat, File Edit, Code Run, Terminal, Browser, Search |
-| OpenAI | Codex / ChatGPT (GPT-4.1, o3, o4-mini) | Chat, File Edit, Code Run, Terminal |
+| Anthropic | Claude API (Fable 5, Opus 5, Sonnet 5, Haiku 4.5) | Chat, File Edit, Code Run, Terminal, Git |
+| Google | Gemini API (3.1 Pro Preview, 3.7 Flash, 3.5 Flash-Lite) | Chat, File Edit, Code Run, Terminal, Git |
+| OpenAI | OpenAI API (GPT-5.6 Sol, Terra, Luna) | Chat, File Edit, Code Run, Terminal, Git |
 | DeepSeek | DeepSeek V3 / R1 Reasoner | Chat, File Edit, Code Run, Reasoning |
 | Groq | Llama 3.3 70B, Mixtral | Chat, File Edit, Code Run |
 | Ollama | Local Models (Llama 3.3, Qwen Coder, DeepSeek R1) | Chat, File Edit, Code Run (Local, Offline) |
@@ -83,14 +90,17 @@ thwip
 
 thwip auto-detects existing API keys from environment variables and existing agent configs (`~/.claude.json`, `~/.gemini/config.json`). Configuration can also be set manually:
 
+Installed apps, CLI sign-ins, and API access are separate. thwip can report a detected Claude, Gemini, or Codex CLI login, but the current SDK adapters require a provider API key. A ChatGPT, Claude, or Google subscription does not automatically provide a reusable third-party API key. Ollama needs no key when its local server is running.
+
 ```toml
 [defaults]
 agent = "claude"
-model = "claude-sonnet-4"
+model = "claude-opus-5"
 project = "."
 theme = "dark"
 stream = true
 auto_save = true
+confirm_tools = true
 
 [keys]
 anthropic = "sk-ant-..."
@@ -106,13 +116,15 @@ host = "http://localhost:11434"
 [fallback]
 enabled = true
 chain = [
-    "claude/claude-sonnet-4",
-    "google/gemini-2.5-pro",
-    "openai/gpt-4.1",
-    "deepseek/deepseek-chat",
+    "claude/claude-opus-5",
+    "google/gemini-3.7-flash",
+    "openai/gpt-5.6-terra",
+    "deepseek/deepseek-v4-flash",
     "ollama/llama3.3"
 ]
 ```
+
+Prefer `/key <provider>` over editing the file directly. Mutating workspace tools ask for confirmation by default, file access is restricted to the selected project, and Thwip stores its config and saved sessions with user-only permissions.
 
 ---
 

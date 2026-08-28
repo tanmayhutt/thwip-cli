@@ -1,18 +1,19 @@
 """
 Google / Antigravity agent adapter.
 
-Full capabilities: chat, file editing, code execution, terminal, browser, search.
+Capabilities: chat plus Thwip's local file, terminal, and Git tools.
 Detects Antigravity IDE, Gemini CLI, and Google API keys.
 """
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import shutil
 import subprocess
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from thwip.agents.base import (
     AgentDone,
@@ -33,15 +34,14 @@ from thwip.agents.base import (
 
 class GoogleAgent(BaseAgent):
     """
-    Google Antigravity / Gemini: full coding agent.
-    Capabilities: Chat, file editing, code execution, terminal, browser, web search.
+    Google Antigravity / Gemini coding agent.
     Uses the google-genai SDK for API communication.
     """
 
     name = "google"
     display_name = "Antigravity / Gemini"
     company = "Google"
-    description = "Google's agentic coding assistant with full IDE, terminal, and browser access"
+    description = "Google's Gemini models with Thwip's local coding tools"
     website = "https://gemini.google.com"
 
     capabilities = {
@@ -50,17 +50,29 @@ class GoogleAgent(BaseAgent):
         Capability.FILE_READ,
         Capability.CODE_RUN,
         Capability.TERMINAL,
-        Capability.BROWSER,
-        Capability.SEARCH,
-        Capability.IMAGE_GEN,
+        Capability.GIT,
     }
 
     available_models = [
         ModelInfo(
-            id="gemini-2.5-pro",
-            name="Gemini 2.5 Pro",
+            id="gemini-3.1-pro-preview",
+            name="Gemini 3.1 Pro Preview",
             tier="flagship",
-            description="Flagship multimodal model with 1M context and advanced reasoning",
+            description="Advanced multimodal reasoning for complex coding tasks",
+            context_window=1_048_576,
+            max_output=65_536,
+            supports_tools=True,
+            supports_streaming=True,
+            supports_vision=True,
+            supports_thinking=True,
+            pricing_input=2.0,
+            pricing_output=12.0,
+        ),
+        ModelInfo(
+            id="gemini-3.7-flash",
+            name="Gemini 3.7 Flash",
+            tier="balanced",
+            description="Latest stable Flash model for coding and agentic workflows",
             context_window=1_048_576,
             max_output=65_536,
             supports_tools=True,
@@ -68,36 +80,22 @@ class GoogleAgent(BaseAgent):
             supports_vision=True,
             supports_thinking=True,
             is_default=True,
-            pricing_input=1.25,
-            pricing_output=10.0,
+            pricing_input=0.75,
+            pricing_output=3.75,
         ),
         ModelInfo(
-            id="gemini-2.5-flash",
-            name="Gemini 2.5 Flash",
-            tier="balanced",
-            description="High-speed balanced model optimized for daily coding workflows",
+            id="gemini-3.5-flash-lite",
+            name="Gemini 3.5 Flash-Lite",
+            tier="fast",
+            description="Stable low-cost model for high-volume agentic tasks",
             context_window=1_048_576,
             max_output=65_536,
             supports_tools=True,
             supports_streaming=True,
             supports_vision=True,
             supports_thinking=True,
-            pricing_input=0.15,
-            pricing_output=0.60,
-        ),
-        ModelInfo(
-            id="gemini-2.5-flash-lite",
-            name="Gemini 2.5 Flash Lite",
-            tier="fast",
-            description="Ultra lightweight and cost-effective model for rapid tasks",
-            context_window=1_048_576,
-            max_output=65_536,
-            supports_tools=True,
-            supports_streaming=True,
-            supports_vision=False,
-            supports_thinking=False,
-            pricing_input=0.075,
-            pricing_output=0.30,
+            pricing_input=0.30,
+            pricing_output=2.50,
         ),
     ]
 
@@ -191,7 +189,9 @@ class GoogleAgent(BaseAgent):
         return "none"
 
     def is_configured(self) -> bool:
-        return bool(self._get_api_key()) or bool(self._has_cli_auth())
+        # Gemini CLI OAuth proves the CLI is signed in, but google-genai cannot
+        # consume that private credential store as an API key.
+        return bool(self._get_api_key())
 
     def get_install_info(self) -> dict[str, str]:
         info: dict[str, str] = {"method": "not installed", "path": "", "version": ""}
@@ -298,12 +298,21 @@ class GoogleAgent(BaseAgent):
         if system_prompt:
             config["system_instruction"] = system_prompt
 
-        model_info = self.get_model_info(model)
-        if model_info and model_info.supports_thinking:
-            config["thinking_config"] = {"thinking_budget": 8192}
-
         try:
             from google.genai import types
+
+            if tools:
+                declarations = []
+                for tool in tools:
+                    function = tool.get("function", tool)
+                    declarations.append(
+                        types.FunctionDeclaration(
+                            name=function["name"],
+                            description=function.get("description", ""),
+                            parameters_json_schema=function.get("parameters", {}),
+                        )
+                    )
+                config["tools"] = [types.Tool(function_declarations=declarations)]
 
             if stream:
                 response = client.models.generate_content_stream(
@@ -322,6 +331,13 @@ class GoogleAgent(BaseAgent):
                                 for part in candidate.content.parts:
                                     if hasattr(part, "thought") and part.thought:
                                         yield ThinkingDelta(content=part.text or "")
+                                    elif getattr(part, "function_call", None):
+                                        call = part.function_call
+                                        yield ToolUseStart(
+                                            tool_id=call.id or call.name or "tool",
+                                            tool_name=call.name or "",
+                                            args=dict(call.args or {}),
+                                        )
                                     elif hasattr(part, "text") and part.text:
                                         yield TextDelta(content=part.text)
 
@@ -348,7 +364,14 @@ class GoogleAgent(BaseAgent):
                     for candidate in response.candidates:
                         if candidate.content and candidate.content.parts:
                             for part in candidate.content.parts:
-                                if hasattr(part, "text") and part.text:
+                                if getattr(part, "function_call", None):
+                                    call = part.function_call
+                                    yield ToolUseStart(
+                                        tool_id=call.id or call.name or "tool",
+                                        tool_name=call.name or "",
+                                        args=dict(call.args or {}),
+                                    )
+                                elif hasattr(part, "text") and part.text:
                                     yield TextDelta(content=part.text)
 
                 um = getattr(response, "usage_metadata", None)

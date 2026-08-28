@@ -1,14 +1,16 @@
 """
 Groq agent adapter.
 
-High speed LPU inference for Llama 3.3, Mixtral, and Gemma models.
+High-speed LPU inference for current Groq production models.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from thwip.agents.base import (
     AgentDone,
@@ -44,6 +46,8 @@ class GroqAgent(BaseAgent):
         Capability.FILE_EDIT,
         Capability.FILE_READ,
         Capability.CODE_RUN,
+        Capability.TERMINAL,
+        Capability.GIT,
     }
 
     available_models = [
@@ -59,14 +63,16 @@ class GroqAgent(BaseAgent):
             pricing_output=0.79,
         ),
         ModelInfo(
-            id="mixtral-8x7b-32768",
-            name="Mixtral 8x7B",
-            context_window=32_768,
-            max_output=32_768,
+            id="openai/gpt-oss-120b",
+            name="GPT-OSS 120B",
+            tier="balanced",
+            context_window=131_072,
+            max_output=65_536,
             supports_tools=True,
             supports_streaming=True,
-            pricing_input=0.24,
-            pricing_output=0.24,
+            supports_thinking=True,
+            pricing_input=0.15,
+            pricing_output=0.60,
         ),
     ]
 
@@ -125,6 +131,8 @@ class GroqAgent(BaseAgent):
 
         client = self._ensure_client()
         model = model or self.get_default_model()
+        if tools:
+            stream = False
 
         api_messages: list[dict[str, Any]] = []
         if system_prompt:
@@ -160,6 +168,13 @@ class GroqAgent(BaseAgent):
                 msg = response.choices[0].message
                 if msg.content:
                     yield TextDelta(content=msg.content)
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        yield ToolUseStart(
+                            tool_id=tc.id,
+                            tool_name=tc.function.name,
+                            args=json.loads(tc.function.arguments) if tc.function.arguments else {},
+                        )
                 usage = response.usage
                 yield AgentDone(
                     usage=TokenUsage(

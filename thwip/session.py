@@ -7,14 +7,23 @@ Enables seamless context portability across agent switches without losing histor
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from thwip.config import get_sessions_dir
+
+
+def _safe_session_name(value: str) -> str:
+    """Return a filename-safe session name that cannot escape the session directory."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip(".-")
+    if not cleaned:
+        raise ValueError("Session name must contain at least one letter or number.")
+    return cleaned[:100]
 
 
 @dataclass
@@ -24,7 +33,7 @@ class Message:
     content: str
     timestamp: float = field(default_factory=time.time)
     agent_name: str = ""           # Which agent created this (e.g. "claude")
-    model: str = ""                # Which model (e.g. "claude-sonnet-4")
+    model: str = ""                # Which model (e.g. "claude-opus-5")
     company: str = ""              # e.g. "Anthropic"
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tokens: int = 0
@@ -33,7 +42,7 @@ class Message:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Message":
+    def from_dict(cls, data: dict[str, Any]) -> Message:
         return cls(**data)
 
 
@@ -44,7 +53,7 @@ class Session:
     name: str = "new-session"
     project_path: str = "."
     current_agent: str = "claude"
-    current_model: str = "claude-sonnet-4"
+    current_model: str = "claude-opus-5"
     system_prompt: str = (
         "You are an expert AI software engineer. You have tools to inspect files, "
         "write code, run commands, and build software. Be concise, precise, and proactive."
@@ -102,7 +111,9 @@ class Session:
     def save(self, custom_name: str | None = None) -> Path:
         """Save session to ~/.thwip/sessions/<id>.json."""
         if custom_name:
-            self.name = custom_name
+            self.name = _safe_session_name(custom_name)
+        else:
+            self.name = _safe_session_name(self.name)
         sessions_dir = get_sessions_dir()
         file_path = sessions_dir / f"{self.name}.json"
         data = {
@@ -116,14 +127,21 @@ class Session:
             "updated_at": self.updated_at,
             "messages": [m.to_dict() for m in self.messages],
         }
-        file_path.write_text(json.dumps(data, indent=2))
+        temporary_path = file_path.with_suffix(".json.tmp")
+        temporary_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        temporary_path.chmod(0o600)
+        temporary_path.replace(file_path)
         return file_path
 
     @classmethod
-    def load(cls, name_or_id: str) -> "Session | None":
+    def load(cls, name_or_id: str) -> Session | None:
         """Load session by name or id."""
         sessions_dir = get_sessions_dir()
-        path = sessions_dir / f"{name_or_id}.json"
+        try:
+            safe_name = _safe_session_name(name_or_id)
+        except ValueError:
+            return None
+        path = sessions_dir / f"{safe_name}.json"
         if not path.is_file():
             # Try searching all sessions
             for f in sessions_dir.glob("*.json"):
@@ -144,7 +162,7 @@ class Session:
                 name=data.get("name", "saved-session"),
                 project_path=data.get("project_path", "."),
                 current_agent=data.get("current_agent", "claude"),
-                current_model=data.get("current_model", "claude-sonnet-4"),
+                current_model=data.get("current_model", "claude-opus-5"),
                 system_prompt=data.get("system_prompt", ""),
                 created_at=data.get("created_at", time.time()),
                 updated_at=data.get("updated_at", time.time()),
@@ -168,7 +186,9 @@ class Session:
                     "agent": data.get("current_agent"),
                     "model": data.get("current_model"),
                     "messages_count": len(data.get("messages", [])),
-                    "updated_at": datetime.fromtimestamp(data.get("updated_at", 0)).strftime("%Y-%m-%d %H:%M"),
+                    "updated_at": datetime.fromtimestamp(
+                        data.get("updated_at", 0), tz=UTC
+                    ).astimezone().strftime("%Y-%m-%d %H:%M"),
                 })
             except Exception:
                 continue

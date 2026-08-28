@@ -12,33 +12,27 @@ Universal coding agent multiplexer:
 from __future__ import annotations
 
 import asyncio
+import getpass
 import os
-import sys
-import time
 from pathlib import Path
-from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
+from rich import box
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich import box
 
-from thwip.agents import ALL_AGENT_CLASSES, AgentRegistry
+from thwip.agents import AgentRegistry
 from thwip.agents.base import (
     AgentDone,
-    AgentEvent,
     BaseAgent,
     Capability,
     LimitHit,
-    LimitStatus,
     TextDelta,
     ThinkingDelta,
-    TokenUsage,
-    ToolResult,
     ToolUseStart,
 )
 from thwip.config import ThwipConfig, get_config_dir
@@ -61,10 +55,8 @@ from thwip.theme import (
     render_limit_warning,
     render_markdown_response,
     render_startup_banner,
-    render_user_prompt,
 )
 from thwip.tools import ToolManager
-from thwip.utils import estimate_cost, format_cost, format_tokens
 
 
 class ThwipCLI:
@@ -86,6 +78,8 @@ class ThwipCLI:
     def _resolve_initial_agent(self) -> BaseAgent:
         agent = self.registry.get_agent(self.session.current_agent)
         if agent and agent.is_configured():
+            if not agent.get_model_info(self.session.current_model):
+                self.session.current_model = agent.get_default_model()
             return agent
 
         # Find first ready agent
@@ -95,8 +89,11 @@ class ThwipCLI:
             self.session.current_model = ready[0].get_default_model()
             return ready[0]
 
-        # Fallback to default instantiated agent even if missing key
-        default = self.registry.get_agent("claude") or self.registry.list_agents()[0]
+        # Prefer an actually installed agent even when it still needs an API key.
+        installed = [agent for agent in self.registry.list_agents() if agent.is_installed()]
+        default = installed[0] if installed else (self.registry.get_agent("claude") or self.registry.list_agents()[0])
+        self.session.current_agent = default.name
+        self.session.current_model = default.get_default_model()
         return default
 
     def run(self) -> None:
@@ -106,7 +103,7 @@ class ThwipCLI:
     async def run_async(self) -> None:
         """Main async REPL loop."""
         # 1. Detect agents on system
-        detected = self.detector.scan_all()
+        self.detector.scan_all()
         all_agents = self.registry.list_agents()
         installed_count = len([a for a in all_agents if a.is_installed()])
         ready_count = len(self.registry.get_ready_agents())
@@ -141,7 +138,10 @@ class ThwipCLI:
             try:
                 # Dynamic prompt showing active agent brand
                 brand = get_brand(self.current_agent.company)
-                caps = [c.value for c in self.current_agent.capabilities]
+                caps = [
+                    capability.value
+                    for capability in self.current_agent.get_capabilities_for_model(self.session.current_model)
+                ]
                 status_bar = render_dynamic_status_bar(
                     agent_name=self.current_agent.name,
                     company=self.current_agent.company,
@@ -287,7 +287,6 @@ class ThwipCLI:
             ("run_code", "Sandbox", "Run inline Python or Node.js code snippets", "Active"),
             ("git_status", "Version Control", "Inspect repository changes and staging", "Active"),
             ("git_diff", "Version Control", "View unified unstaged/staged diffs", "Active"),
-            ("git_commit", "Version Control", "Commit staged workspace changes", "Active"),
         ]
         for name, cat, desc, status in tools_info:
             table.add_row(name, cat, desc, f"[bold green]{status}[/bold green]")
@@ -304,7 +303,7 @@ class ThwipCLI:
             ("/switch [agent] [model]", "Switch active agent/model mid-conversation without losing context"),
             ("/agents", "Show all detected coding agents, company status & capabilities"),
             ("/models [agent|tier]", "List models filtered by provider or tier (flagship, balanced, fast)"),
-            ("/key [provider] [key]", "View or configure API keys saved in ~/.thwip/config.toml"),
+            ("/key [provider]", "Securely enter an API key without storing it in terminal history"),
             ("/tools", "List all universal file, terminal, and git tools"),
             ("/status", "Display current session, project, and token stats"),
             ("/limits", "View token usage, quota, and spend metrics"),
@@ -343,7 +342,6 @@ class ThwipCLI:
             ordered = ready_agents + unready_agents
 
             for i, a in enumerate(ordered, 1):
-                brand = get_brand(a.company)
                 status_str, status_style = a.get_status_display()
                 install_info = a.get_install_info()
                 loc = f" ({install_info['path']})" if install_info.get("path") else ""
@@ -371,20 +369,33 @@ class ThwipCLI:
             print_error(f"Unknown agent '{agent_name}'.")
             return
 
+        if not new_agent.is_installed():
+            print_error(f"{new_agent.display_name} is not installed on this machine.")
+            return
+
+        chosen_model = model_id or new_agent.get_default_model()
+        if not new_agent.get_model_info(chosen_model):
+            valid_models = ", ".join(model.id for model in new_agent.available_models)
+            print_error(f"Unknown model '{chosen_model}' for {new_agent.display_name}. Available: {valid_models}")
+            return
+
         old_agent = self.current_agent
-        old_caps = set(old_agent.capabilities)
+        old_caps = old_agent.get_capabilities_for_model(self.session.current_model)
 
         self.current_agent = new_agent
-        chosen_model = model_id or new_agent.get_default_model()
         self.session.switch_agent(new_agent.name, chosen_model)
 
         # Capability comparison & disclaimer
-        missing = new_agent.get_missing_capabilities(old_caps)
+        new_capabilities = new_agent.get_capabilities_for_model(chosen_model)
+        missing = [
+            capability.display_name
+            for capability in sorted(old_caps - new_capabilities, key=lambda item: item.value)
+        ]
         console.print(
             render_capability_disclaimer(
                 agent_name=new_agent.display_name,
                 company=new_agent.company,
-                supported=[c.display_name for c in new_agent.capabilities],
+                supported=[c.display_name for c in new_capabilities],
                 unsupported=missing,
             )
         )
@@ -436,6 +447,9 @@ class ThwipCLI:
             if not agent_target:
                 print_error(f"Agent '{arg1}' not found.")
                 return
+            if not agent_target.is_installed():
+                print_error(f"{agent_target.display_name} is not installed or configured on this machine.")
+                return
             if arg2.lower() in tier_aliases:
                 tier_filter = tier_aliases[arg2.lower()]
 
@@ -448,7 +462,7 @@ class ThwipCLI:
             if tier_filter:
                 title += f" ({tier_filter.title()} Tier)"
         else:
-            agents_to_show = self.registry.list_agents()
+            agents_to_show = [agent for agent in self.registry.list_agents() if agent.is_installed()]
             title = f"All {tier_filter.title()} Tier Models Across Providers"
 
         table = Table(title=title, box=box.ROUNDED)
@@ -510,9 +524,20 @@ class ThwipCLI:
             "openrouter": "openrouter",
         }
 
-        if provider and key:
+        if key:
+            print_error("Do not put API keys directly in commands because prompt history may retain them. Use /key <provider>.")
+            return
+
+        if provider:
             target_prov = provider_map.get(provider.lower(), provider.lower())
-            self.config.keys[target_prov] = key
+            if target_prov not in set(provider_map.values()):
+                print_error(f"Unknown provider '{provider}'.")
+                return
+            secret = getpass.getpass(f"API key for {target_prov}: ").strip()
+            if not secret:
+                print_warning("No key entered. Configuration unchanged.")
+                return
+            self.config.keys[target_prov] = secret
             self.config.key_sources[target_prov] = "config.toml"
             self.config.save()
 
@@ -546,7 +571,7 @@ class ThwipCLI:
             table.add_row(label, status, source, cmd_hint)
 
         console.print(table)
-        console.print("[dim]To set a key: [bold white]/key <provider> <key>[/bold white] (e.g. /key google AIzaSy...)[/dim]\n")
+        console.print("[dim]To set a key securely: [bold white]/key <provider>[/bold white][/dim]\n")
 
     def cmd_show_status(self) -> None:
         """Display status."""
@@ -615,7 +640,7 @@ class ThwipCLI:
                 console.print(f"\n[bold cyan]You ▶ [/bold cyan]{m.content}")
             elif m.role == "assistant":
                 badge = render_agent_badge(m.agent_name, m.model, m.company)
-                console.print(f"\n", badge)
+                console.print("\n", badge)
                 console.print(render_markdown_response(m.content))
 
     def cmd_show_cost(self) -> None:
@@ -654,86 +679,112 @@ class ThwipCLI:
     async def process_user_message(self, text: str) -> None:
         """Send message to active agent, handle streaming, tool calls, and limits."""
         self.session.add_user_message(text)
+        working_messages = self.session.to_portable_messages()
 
-        # Prepare messages in portable format
-        portable_msgs = self.session.to_portable_messages()
-
-        brand = get_brand(self.current_agent.company)
         badge = render_agent_badge(
             self.current_agent.name,
             self.session.current_model,
             self.current_agent.company,
         )
-        console.print(f"\n", badge)
+        console.print("\n", badge)
 
         # Get tools if agent supports them
         tools = None
-        if self.current_agent.has_capability(Capability.FILE_EDIT):
+        effective_capabilities = self.current_agent.get_capabilities_for_model(self.session.current_model)
+        if Capability.FILE_EDIT in effective_capabilities:
             if self.current_agent.name == "claude":
                 tools = self.tool_manager.get_anthropic_tools()
             else:
                 tools = self.tool_manager.get_openai_tools()
 
         collected_text = ""
-        collected_thinking = ""
         total_tokens = 0
         limit_hit = False
 
-        with Live(console=console, refresh_per_second=12) as live:
-            try:
-                stream = self.current_agent.chat(
-                    messages=portable_msgs,
-                    model=self.session.current_model,
-                    system_prompt=self.session.system_prompt,
-                    tools=tools,
-                    stream=self.config.stream,
+        # Tool calls need complete arguments. Run those responses non-streaming,
+        # execute them, then send the results back for the model's next turn.
+        for _tool_round in range(8):
+            round_text = ""
+            round_thinking = ""
+            tool_requests: list[ToolUseStart] = []
+
+            with Live(console=console, refresh_per_second=12) as live:
+                try:
+                    response_stream = self.current_agent.chat(
+                        messages=working_messages,
+                        model=self.session.current_model,
+                        system_prompt=self.session.system_prompt,
+                        tools=tools,
+                        stream=self.config.stream if tools is None else False,
+                    )
+
+                    async for event in response_stream:
+                        if isinstance(event, TextDelta):
+                            round_text += event.content
+                            live.update(render_markdown_response(collected_text + round_text))
+                        elif isinstance(event, ThinkingDelta):
+                            round_thinking += event.content
+                            live.update(
+                                Panel(
+                                    Text(round_thinking, style="dim italic"),
+                                    title="Reasoning / Thinking",
+                                    border_style="dim magenta",
+                                    box=box.MINIMAL,
+                                )
+                            )
+                        elif isinstance(event, ToolUseStart):
+                            tool_requests.append(event)
+                        elif isinstance(event, AgentDone):
+                            used = event.usage.input_tokens + event.usage.output_tokens
+                            total_tokens += used
+                            self.usage_tracker.record_usage(
+                                agent_name=self.current_agent.name,
+                                model=self.session.current_model,
+                                input_tokens=event.usage.input_tokens,
+                                output_tokens=event.usage.output_tokens,
+                            )
+                        elif isinstance(event, LimitHit):
+                            limit_hit = True
+                            live.stop()
+                            self.usage_tracker.record_limit_hit(self.current_agent.name, event.message)
+                            await self.handle_limit_failover(event)
+                            break
+                except Exception as exc:
+                    live.stop()
+                    print_error(f"Agent error: {exc}")
+                    return
+
+            collected_text += round_text
+            if limit_hit or not tool_requests:
+                break
+
+            results = []
+            for request in tool_requests:
+                display_args = {key: value for key, value in request.args.items() if key != "content"}
+                console.print(
+                    f"\n  [bold yellow]Action: {request.tool_name}[/bold yellow] [dim]{display_args}[/dim]"
                 )
+                approved = True
+                read_only = request.tool_name in {"read_file", "list_files", "git_status", "git_diff"}
+                if self.config.confirm_tools and not read_only:
+                    answer = input("  Allow this action? [y/N]: ").strip().lower()
+                    approved = answer in {"y", "yes"}
+                output = (
+                    self.tool_manager.execute_tool(request.tool_name, request.args)
+                    if approved
+                    else "Denied by user."
+                )
+                console.print(f"  [dim green]Result:[/dim green] [dim]{output[:500]}[/dim]")
+                results.append(f"Tool {request.tool_name} ({request.tool_id}) returned:\n{output}")
 
-                async for event in stream:
-                    if isinstance(event, TextDelta):
-                        collected_text += event.content
-                        live.update(render_markdown_response(collected_text))
-
-                    elif isinstance(event, ThinkingDelta):
-                        collected_thinking += event.content
-                        # Render thinking panel
-                        think_panel = Panel(
-                            Text(collected_thinking, style="dim italic"),
-                            title="Reasoning / Thinking",
-                            border_style="dim magenta",
-                            box=box.MINIMAL,
-                        )
-                        live.update(think_panel)
-
-                    elif isinstance(event, ToolUseStart):
-                        live.stop()
-                        console.print(
-                            f"\n  [bold yellow]Action: {event.tool_name}[/bold yellow] [dim]{event.args}[/dim]"
-                        )
-                        # Execute tool
-                        tool_output = self.tool_manager.execute_tool(event.tool_name, event.args)
-                        console.print(f"  [dim green]Result:[/dim green] [dim]{tool_output[:200]}[/dim]")
-                        live.start()
-
-                    elif isinstance(event, AgentDone):
-                        total_tokens = event.usage.input_tokens + event.usage.output_tokens
-                        self.usage_tracker.record_usage(
-                            agent_name=self.current_agent.name,
-                            model=self.session.current_model,
-                            input_tokens=event.usage.input_tokens,
-                            output_tokens=event.usage.output_tokens,
-                        )
-
-                    elif isinstance(event, LimitHit):
-                        limit_hit = True
-                        live.stop()
-                        self.usage_tracker.record_limit_hit(self.current_agent.name, event.message)
-                        await self.handle_limit_failover(event)
-                        break
-
-            except Exception as e:
-                live.stop()
-                print_error(f"Agent error: {e}")
+            assistant_note = round_text or "I requested one or more workspace tools."
+            working_messages.append({"role": "assistant", "content": assistant_note})
+            working_messages.append({
+                "role": "user",
+                "content": "Workspace tool results follow. Continue the task using these results.\n\n" + "\n\n".join(results),
+            })
+        else:
+            print_warning("Stopped after 8 consecutive tool rounds to prevent an infinite loop.")
 
         if collected_text and not limit_hit:
             self.session.add_assistant_message(
@@ -779,6 +830,7 @@ class ThwipCLI:
                     await self.cmd_switch(a.name, target_alt["model"])
                     console.print("[bold green]Retrying your last message with new agent...[/bold green]")
                     last_msg = self.session.messages[-1].content
+                    self.session.messages.pop()
                     await self.process_user_message(last_msg)
                     break
 

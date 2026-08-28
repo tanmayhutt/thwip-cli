@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,15 +23,19 @@ except ImportError:
 
 import tomli_w
 
-
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
 def get_config_dir() -> Path:
     """Return ~/.thwip/, creating it if needed."""
-    config_dir = Path.home() / ".thwip"
-    config_dir.mkdir(parents=True, exist_ok=True)
+    override = os.environ.get("THWIP_CONFIG_DIR", "").strip()
+    config_dir = Path(override).expanduser() if override else Path.home() / ".thwip"
+    config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        config_dir.chmod(0o700)
+    except OSError:
+        pass
     return config_dir
 
 
@@ -172,10 +175,10 @@ def get_key_sources() -> dict[str, str]:
 class FallbackConfig:
     enabled: bool = True
     chain: list[str] = field(default_factory=lambda: [
-        "claude/claude-sonnet-4",
-        "google/gemini-2.5-pro",
-        "openai/gpt-4.1",
-        "deepseek/deepseek-chat",
+        "claude/claude-opus-5",
+        "google/gemini-3.7-flash",
+        "openai/gpt-5.6-terra",
+        "deepseek/deepseek-v4-flash",
         "ollama/llama3.3",
     ])
 
@@ -204,7 +207,7 @@ class ThwipConfig:
 
     # Defaults
     default_agent: str = "claude"
-    default_model: str = "claude-sonnet-4"
+    default_model: str = "claude-opus-5"
     project: str = "."
     theme: str = "dark"
     stream: bool = True
@@ -224,7 +227,7 @@ class ThwipConfig:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
 
     @classmethod
-    def load(cls) -> "ThwipConfig":
+    def load(cls) -> ThwipConfig:
         """Load config from file, env vars, and agent configs."""
         config = cls()
         config_path = get_config_path()
@@ -240,12 +243,13 @@ class ThwipConfig:
 
         # Merge API keys from all sources
         discovered = discover_api_keys()
-        config.key_sources = get_key_sources()
+        discovered_sources = get_key_sources()
 
         # Config file keys take priority, then discovered keys fill gaps
         for provider, key in discovered.items():
             if provider not in config.keys or not config.keys[provider]:
                 config.keys[provider] = key
+                config.key_sources[provider] = discovered_sources.get(provider, "discovered")
 
         return config
 
@@ -340,6 +344,10 @@ class ThwipConfig:
         config_path = get_config_path()
         with open(config_path, "wb") as f:
             tomli_w.dump(data, f)
+        try:
+            config_path.chmod(0o600)
+        except OSError:
+            pass
 
     def get_key(self, provider: str) -> str | None:
         """Get API key for a provider, returning None if not found."""

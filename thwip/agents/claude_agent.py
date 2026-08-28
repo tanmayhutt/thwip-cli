@@ -7,12 +7,13 @@ Detects Claude Code CLI installation and Anthropic API keys.
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import shutil
 import subprocess
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from thwip.agents.base import (
     AgentDone,
@@ -34,7 +35,7 @@ from thwip.agents.base import (
 class ClaudeAgent(BaseAgent):
     """
     Anthropic Claude Code: full coding agent.
-    Capabilities: Chat, file editing, code execution, terminal, git, browser, search.
+    Capabilities: chat plus Thwip's local file, terminal, and Git tools.
     Uses the Anthropic Python SDK for API communication.
     """
 
@@ -51,53 +52,62 @@ class ClaudeAgent(BaseAgent):
         Capability.CODE_RUN,
         Capability.TERMINAL,
         Capability.GIT,
-        Capability.BROWSER,
-        Capability.SEARCH,
     }
 
     available_models = [
         ModelInfo(
-            id="claude-sonnet-4",
-            name="Claude Sonnet 4",
+            id="claude-opus-5",
+            name="Claude Opus 5",
             tier="flagship",
-            description="Flagship coding intelligence with hybrid thinking and tool precision",
-            context_window=200_000,
-            max_output=16_384,
+            description="Complex agentic coding and enterprise work",
+            context_window=1_000_000,
+            max_output=128_000,
             supports_tools=True,
             supports_streaming=True,
             supports_vision=True,
-            supports_thinking=True,
             is_default=True,
+            pricing_input=5.0,
+            pricing_output=25.0,
+        ),
+        ModelInfo(
+            id="claude-fable-5",
+            name="Claude Fable 5",
+            tier="flagship",
+            description="Highest capability for long-running agents and deep reasoning",
+            context_window=1_000_000,
+            max_output=128_000,
+            supports_tools=True,
+            supports_streaming=True,
+            supports_vision=True,
+            pricing_input=10.0,
+            pricing_output=50.0,
+        ),
+        ModelInfo(
+            id="claude-sonnet-5",
+            name="Claude Sonnet 5",
+            tier="balanced",
+            description="Best balance of intelligence and speed for production coding",
+            context_window=1_000_000,
+            max_output=128_000,
+            supports_tools=True,
+            supports_streaming=True,
+            supports_vision=True,
             pricing_input=3.0,
             pricing_output=15.0,
         ),
         ModelInfo(
-            id="claude-opus-4",
-            name="Claude Opus 4",
-            tier="flagship",
-            description="Ultra high capability reasoning for complex systems engineering",
-            context_window=200_000,
-            max_output=32_000,
-            supports_tools=True,
-            supports_streaming=True,
-            supports_vision=True,
-            supports_thinking=True,
-            pricing_input=15.0,
-            pricing_output=75.0,
-        ),
-        ModelInfo(
-            id="claude-haiku-3.5",
-            name="Claude Haiku 3.5",
+            id="claude-haiku-4-5-20251001",
+            name="Claude Haiku 4.5",
             tier="fast",
-            description="Fastest lightweight Claude model for rapid iteration",
+            description="Fastest Claude model with near-frontier intelligence",
             context_window=200_000,
-            max_output=8_192,
+            max_output=64_000,
             supports_tools=True,
             supports_streaming=True,
             supports_vision=True,
             is_default=False,
-            pricing_input=0.80,
-            pricing_output=4.0,
+            pricing_input=1.0,
+            pricing_output=5.0,
         ),
     ]
 
@@ -209,8 +219,8 @@ class ClaudeAgent(BaseAgent):
         return "none"
 
     def is_configured(self) -> bool:
-        """Check if we have a valid API key or subscription auth."""
-        return bool(self._get_api_key()) or bool(self._has_cli_auth())
+        """Return whether the SDK adapter has credentials it can actually use."""
+        return bool(self._get_api_key())
 
     def get_install_info(self) -> dict[str, str]:
         """Get Claude Code installation details."""
@@ -299,12 +309,15 @@ class ClaudeAgent(BaseAgent):
 
         client = self._ensure_client()
         model = model or self.get_default_model()
+        if tools:
+            stream = False
 
         # Build request kwargs
+        model_info = self.get_model_info(model)
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "max_tokens": 16_384,
+            "max_tokens": model_info.max_output if model_info else 16_384,
         }
 
         if system_prompt:
@@ -314,11 +327,9 @@ class ClaudeAgent(BaseAgent):
             kwargs["tools"] = tools
 
         # Check if model supports extended thinking
-        model_info = self.get_model_info(model)
         if model_info and model_info.supports_thinking:
             # Enable extended thinking for supported models
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": 10_000}
-            kwargs["max_tokens"] = 16_384 + 10_000
 
         try:
             if stream:

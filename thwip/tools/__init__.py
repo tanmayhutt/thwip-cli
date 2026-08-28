@@ -5,10 +5,11 @@ Tool registry and schema translator for LLMs.
 from __future__ import annotations
 
 from typing import Any
-from thwip.tools.file_editor import FileEditor
-from thwip.tools.terminal import TerminalRunner
+
 from thwip.tools.code_runner import CodeRunner
+from thwip.tools.file_editor import FileEditor
 from thwip.tools.git_ops import GitOps
+from thwip.tools.terminal import TerminalRunner
 
 
 class ToolManager:
@@ -96,6 +97,37 @@ class ToolManager:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_python",
+                    "description": "Run a Python snippet in the project workspace.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"code": {"type": "string"}},
+                        "required": ["code"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "git_status",
+                    "description": "Inspect the current Git working tree status.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "git_diff",
+                    "description": "Inspect unstaged or staged Git changes.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"staged": {"type": "boolean", "default": False}},
+                    },
+                },
+            },
         ]
 
     def get_anthropic_tools(self) -> list[dict[str, Any]]:
@@ -156,6 +188,28 @@ class ToolManager:
                     "properties": {
                         "sub_dir": {"type": "string", "description": "Subdirectory to list (default .)"},
                     },
+                },
+            },
+            {
+                "name": "run_python",
+                "description": "Run a Python snippet in the project workspace.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"code": {"type": "string"}},
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "git_status",
+                "description": "Inspect the current Git working tree status.",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "git_diff",
+                "description": "Inspect unstaged or staged Git changes.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"staged": {"type": "boolean", "default": False}},
                 },
             },
         ]

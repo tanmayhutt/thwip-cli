@@ -7,7 +7,6 @@ from __future__ import annotations
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.key_binding import KeyBindings
 
-
 SLASH_COMMANDS = [
     ("/switch", "Switch agent and model mid-conversation"),
     ("/agents", "Show all detected coding agents & status"),

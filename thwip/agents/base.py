@@ -8,11 +8,11 @@ agent (Claude, Antigravity, Codex, etc.) must follow.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum, auto
-from typing import Any, AsyncIterator
-
+from enum import Enum
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Capabilities: what an agent can do
@@ -156,7 +156,7 @@ AgentEvent = TextDelta | ThinkingDelta | ToolUseStart | ToolResult | TokenUsage 
 @dataclass
 class ModelInfo:
     """Information about a specific model."""
-    id: str                     # "claude-sonnet-4"
+    id: str                     # "claude-opus-5"
     name: str                   # "Claude Sonnet 4"
     tier: str = "balanced"      # "flagship" (high), "balanced" (mid), "fast" (low-cost)
     description: str = ""       # e.g. "Flagship reasoning with 1M context"
@@ -302,6 +302,13 @@ class BaseAgent(ABC):
         """Check if this agent supports a capability."""
         return cap in self.capabilities
 
+    def get_capabilities_for_model(self, model_id: str) -> set[Capability]:
+        """Return capabilities available for a particular model selection."""
+        model = self.get_model_info(model_id)
+        if model and not model.supports_tools:
+            return {Capability.CHAT}
+        return set(self.capabilities)
+
     def get_missing_capabilities(self, compared_to: set[Capability]) -> list[str]:
         """Get capabilities that this agent lacks compared to another set."""
         missing = compared_to - self.capabilities
@@ -316,7 +323,9 @@ class BaseAgent(ABC):
         if not self.is_installed():
             return ("Not Installed", "dim")
         if not self.is_configured():
-            return ("Installed (No Key)", "status.limited")
+            if self.auth_method in ("oauth", "subscription"):
+                return ("Installed (CLI Auth Only)", "status.limited")
+            return ("Installed (No API Key)", "status.limited")
 
         # Show auth method in status for non-API-key auth
         auth = self.auth_method

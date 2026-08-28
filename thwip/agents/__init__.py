@@ -4,20 +4,18 @@ Agent registry and discovery for thwip.
 
 from __future__ import annotations
 
-from typing import Type
-
-from thwip.agents.base import BaseAgent, Capability, LimitStatus, ModelInfo
+from thwip.agents.base import BaseAgent
 from thwip.agents.claude_agent import ClaudeAgent
-from thwip.agents.google_agent import GoogleAgent
-from thwip.agents.openai_agent import OpenAIAgent
 from thwip.agents.deepseek_agent import DeepSeekAgent
+from thwip.agents.google_agent import GoogleAgent
 from thwip.agents.groq_agent import GroqAgent
 from thwip.agents.ollama_agent import OllamaAgent
+from thwip.agents.openai_agent import OpenAIAgent
 from thwip.agents.openrouter_agent import OpenRouterAgent
 from thwip.config import ThwipConfig
 
 # List of all available agent classes in order
-ALL_AGENT_CLASSES: list[Type[BaseAgent]] = [
+ALL_AGENT_CLASSES: list[type[BaseAgent]] = [
     ClaudeAgent,
     GoogleAgent,
     OpenAIAgent,

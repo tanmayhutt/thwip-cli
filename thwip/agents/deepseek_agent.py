@@ -1,17 +1,16 @@
 """
 DeepSeek agent adapter.
-
-Capabilities: Chat, code generation, reasoning, file editing.
 Uses OpenAI-compatible API client pointing to DeepSeek endpoints.
 """
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import shutil
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from thwip.agents.base import (
     AgentDone,
@@ -32,7 +31,7 @@ from thwip.agents.base import (
 
 class DeepSeekAgent(BaseAgent):
     """
-    DeepSeek Coder / DeepSeek V3 / R1 Agent.
+    DeepSeek V4 agent.
 
     Capabilities: Chat, code generation, reasoning, file editing.
     Uses OpenAI-compatible client connecting to https://api.deepseek.com.
@@ -41,7 +40,7 @@ class DeepSeekAgent(BaseAgent):
     name = "deepseek"
     display_name = "DeepSeek"
     company = "DeepSeek"
-    description = "High performance reasoning & coding models with DeepSeek R1 and V3"
+    description = "High-performance reasoning and coding with DeepSeek V4"
     website = "https://deepseek.com"
 
     capabilities = {
@@ -49,31 +48,35 @@ class DeepSeekAgent(BaseAgent):
         Capability.FILE_EDIT,
         Capability.FILE_READ,
         Capability.CODE_RUN,
-        Capability.SEARCH,
+        Capability.TERMINAL,
+        Capability.GIT,
     }
 
     available_models = [
         ModelInfo(
-            id="deepseek-chat",
-            name="DeepSeek V3 (Chat)",
-            context_window=64_000,
-            max_output=8_192,
+            id="deepseek-v4-pro",
+            name="DeepSeek V4 Pro",
+            tier="flagship",
+            context_window=1_000_000,
+            max_output=384_000,
             supports_tools=True,
             supports_streaming=True,
+            supports_thinking=True,
             is_default=True,
-            pricing_input=0.14,
-            pricing_output=0.28,
+            pricing_input=0.435,
+            pricing_output=0.87,
         ),
         ModelInfo(
-            id="deepseek-reasoner",
-            name="DeepSeek R1 (Reasoner)",
-            context_window=64_000,
-            max_output=8_192,
-            supports_tools=False,
+            id="deepseek-v4-flash",
+            name="DeepSeek V4 Flash",
+            tier="fast",
+            context_window=1_000_000,
+            max_output=384_000,
+            supports_tools=True,
             supports_streaming=True,
             supports_thinking=True,
-            pricing_input=0.55,
-            pricing_output=2.19,
+            pricing_input=0.14,
+            pricing_output=0.28,
         ),
     ]
 
@@ -142,6 +145,8 @@ class DeepSeekAgent(BaseAgent):
 
         client = self._ensure_client()
         model = model or self.get_default_model()
+        if tools:
+            stream = False
 
         api_messages: list[dict[str, Any]] = []
         if system_prompt:
@@ -153,7 +158,7 @@ class DeepSeekAgent(BaseAgent):
             "messages": api_messages,
             "stream": stream,
         }
-        if tools and model != "deepseek-reasoner":
+        if tools:
             kwargs["tools"] = tools
 
         try:
@@ -191,6 +196,13 @@ class DeepSeekAgent(BaseAgent):
                     yield ThinkingDelta(content=reasoning)
                 if msg.content:
                     yield TextDelta(content=msg.content)
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        yield ToolUseStart(
+                            tool_id=tc.id,
+                            tool_name=tc.function.name,
+                            args=json.loads(tc.function.arguments) if tc.function.arguments else {},
+                        )
                 usage = response.usage
                 yield AgentDone(
                     usage=TokenUsage(

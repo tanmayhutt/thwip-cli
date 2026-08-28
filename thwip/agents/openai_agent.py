@@ -1,18 +1,19 @@
 """
 OpenAI / Codex agent adapter.
 
-Full capabilities: chat, file editing, code execution (sandboxed).
+Full capabilities: chat plus Thwip's project-scoped local tools.
 Detects Codex CLI, OpenAI API keys.
 """
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import shutil
 import subprocess
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from thwip.agents.base import (
     AgentDone,
@@ -25,7 +26,6 @@ from thwip.agents.base import (
     SubscriptionInfo,
     SubscriptionTier,
     TextDelta,
-    ThinkingDelta,
     TokenUsage,
     ToolUseStart,
 )
@@ -35,7 +35,7 @@ class OpenAIAgent(BaseAgent):
     """
     OpenAI Codex / ChatGPT: coding agent.
 
-    Capabilities: Chat, file editing, code execution (sandboxed).
+    Capabilities: Chat plus project-scoped file and command tools.
     Uses the OpenAI Python SDK.
     """
 
@@ -51,88 +51,52 @@ class OpenAIAgent(BaseAgent):
         Capability.FILE_READ,
         Capability.CODE_RUN,
         Capability.TERMINAL,
-        Capability.IMAGE_GEN,
-        Capability.SEARCH,
+        Capability.GIT,
     }
 
     available_models = [
         ModelInfo(
-            id="gpt-4.1",
-            name="GPT-4.1",
+            id="gpt-5.6-sol",
+            name="GPT-5.6 Sol",
             tier="flagship",
-            description="Next-generation flagship with 1M context and advanced coding",
-            context_window=1_047_576,
-            max_output=32_768,
+            description="Frontier model for complex professional work and coding",
+            context_window=1_050_000,
+            max_output=128_000,
             supports_tools=True,
             supports_streaming=True,
             supports_vision=True,
+            supports_thinking=True,
             is_default=True,
-            pricing_input=2.0,
-            pricing_output=8.0,
+            pricing_input=4.0,
+            pricing_output=20.0,
         ),
         ModelInfo(
-            id="o3",
-            name="O3",
-            tier="flagship",
-            description="Deep reasoning model with autonomous multi-step problem solving",
-            context_window=200_000,
-            max_output=100_000,
-            supports_tools=True,
-            supports_streaming=True,
-            supports_thinking=True,
-            pricing_input=2.0,
-            pricing_output=8.0,
-        ),
-        ModelInfo(
-            id="gpt-4o",
-            name="GPT-4o",
+            id="gpt-5.6-terra",
+            name="GPT-5.6 Terra",
             tier="balanced",
-            description="High-speed multimodal flagship for omni-modal coding and vision",
-            context_window=128_000,
-            max_output=16_384,
+            description="Balanced intelligence and cost for everyday agentic coding",
+            context_window=1_050_000,
+            max_output=128_000,
             supports_tools=True,
             supports_streaming=True,
             supports_vision=True,
-            pricing_input=2.50,
-            pricing_output=10.0,
-        ),
-        ModelInfo(
-            id="o4-mini",
-            name="O4 Mini",
-            tier="balanced",
-            description="Fast and affordable reasoning model for everyday programming",
-            context_window=200_000,
-            max_output=100_000,
-            supports_tools=True,
-            supports_streaming=True,
             supports_thinking=True,
-            pricing_input=1.10,
-            pricing_output=4.40,
+            pricing_input=2.0,
+            pricing_output=12.0,
         ),
         ModelInfo(
-            id="gpt-4o-mini",
-            name="GPT-4o Mini",
+            id="gpt-5.6-luna",
+            name="GPT-5.6 Luna",
             tier="fast",
-            description="Lightweight and low-latency model for fast script tasks",
-            context_window=128_000,
-            max_output=16_384,
+            description="Cost-sensitive GPT-5.6 model for high-volume coding tasks",
+            context_window=1_050_000,
+            max_output=128_000,
             supports_tools=True,
             supports_streaming=True,
             supports_vision=True,
-            pricing_input=0.15,
-            pricing_output=0.60,
-        ),
-        ModelInfo(
-            id="codex-mini",
-            name="Codex Mini",
-            tier="fast",
-            description="Specialized fast code generation model",
-            context_window=200_000,
-            max_output=16_384,
-            supports_tools=True,
-            supports_streaming=True,
-            pricing_input=1.50,
-            pricing_output=6.0,
+            supports_thinking=True,
+            pricing_input=0.20,
+            pricing_output=1.20,
         ),
     ]
 
@@ -233,7 +197,8 @@ class OpenAIAgent(BaseAgent):
         return "none"
 
     def is_configured(self) -> bool:
-        return bool(self._get_api_key()) or bool(self._has_cli_auth())
+        # Codex CLI OAuth is scoped to the Codex client and is not an OpenAI API key.
+        return bool(self._get_api_key())
 
     def get_install_info(self) -> dict[str, str]:
         info: dict[str, str] = {"method": "not installed", "path": "", "version": ""}
@@ -327,6 +292,8 @@ class OpenAIAgent(BaseAgent):
 
         client = self._ensure_client()
         model = model or self.get_default_model()
+        if tools:
+            stream = False
 
         # Build messages with system prompt
         api_messages: list[dict[str, Any]] = []
@@ -345,9 +312,9 @@ class OpenAIAgent(BaseAgent):
         # Reasoning models use different params
         model_info = self.get_model_info(model)
         if model_info and model_info.supports_thinking:
-            kwargs["max_completion_tokens"] = 100_000
+            kwargs["max_completion_tokens"] = model_info.max_output
         else:
-            kwargs["max_tokens"] = 16_384
+            kwargs["max_tokens"] = model_info.max_output if model_info else 16_384
 
         try:
             if stream:
@@ -382,27 +349,43 @@ class OpenAIAgent(BaseAgent):
                 self._last_limit_status = LimitStatus.OK
 
             else:
-                response = await client.chat.completions.create(**kwargs)
+                response_tools = []
+                for tool in tools or []:
+                    function = tool.get("function", tool)
+                    response_tools.append({
+                        "type": "function",
+                        "name": function["name"],
+                        "description": function.get("description", ""),
+                        "parameters": function.get("parameters", {}),
+                    })
+                response_kwargs: dict[str, Any] = {
+                    "model": model,
+                    "input": api_messages,
+                    "max_output_tokens": model_info.max_output if model_info else 16_384,
+                }
+                if response_tools:
+                    response_kwargs["tools"] = response_tools
+                if model_info and model_info.supports_thinking:
+                    response_kwargs["reasoning"] = {"effort": "medium"}
 
-                if response.choices:
-                    msg = response.choices[0].message
-                    if msg.content:
-                        yield TextDelta(content=msg.content)
-                    if msg.tool_calls:
-                        for tc in msg.tool_calls:
-                            yield ToolUseStart(
-                                tool_id=tc.id,
-                                tool_name=tc.function.name,
-                                args=json.loads(tc.function.arguments) if tc.function.arguments else {},
-                            )
+                response = await client.responses.create(**response_kwargs)
+                if response.output_text:
+                    yield TextDelta(content=response.output_text)
+                for item in response.output:
+                    if getattr(item, "type", "") == "function_call":
+                        yield ToolUseStart(
+                            tool_id=item.call_id,
+                            tool_name=item.name,
+                            args=json.loads(item.arguments) if item.arguments else {},
+                        )
 
                 usage = response.usage
                 yield AgentDone(
                     usage=TokenUsage(
-                        input_tokens=usage.prompt_tokens if usage else 0,
-                        output_tokens=usage.completion_tokens if usage else 0,
+                        input_tokens=usage.input_tokens if usage else 0,
+                        output_tokens=usage.output_tokens if usage else 0,
                     ),
-                    stop_reason=response.choices[0].finish_reason if response.choices else "stop",
+                    stop_reason="completed",
                 )
                 self._last_limit_status = LimitStatus.OK
 

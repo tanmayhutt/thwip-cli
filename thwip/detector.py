@@ -12,15 +12,12 @@ Scans the local machine for:
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-from thwip.agents.base import Capability
 
 
 @dataclass
@@ -212,7 +209,7 @@ class SystemDetector:
                     except Exception:
                         pass
 
-                sub_status = "Active" if is_configured else "Needs Key"
+                sub_status = "API Credentials Found" if is_configured else "Installed"
                 if spec["name"] == "Ollama":
                     sub_status = "Unlimited"
 
@@ -241,10 +238,10 @@ class SystemDetector:
                         category=app["category"],
                         install_path=str(p),
                         version="Installed",
-                        is_configured=True,
+                        is_configured=False,
                         config_source="macOS App",
                         capabilities=app["capabilities"],
-                        subscription_status="Active",
+                        subscription_status="Installed",
                     )
                 )
 
@@ -267,10 +264,10 @@ class SystemDetector:
                                 category="Editor Extension",
                                 install_path="VS Code Extension",
                                 version="Installed",
-                                is_configured=True,
+                                is_configured=False,
                                 config_source="VS Code Config",
                                 capabilities=ext["capabilities"],
-                                subscription_status="Active",
+                                subscription_status="Installed",
                             )
                         )
         except Exception:

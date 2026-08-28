@@ -4,8 +4,14 @@ Unit tests for agent registry and capabilities.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from thwip.agents import AgentRegistry
 from thwip.agents.base import Capability
+from thwip.agents.google_agent import GoogleAgent
+from thwip.agents.openai_agent import OpenAIAgent
 
 
 def test_agent_registry_initialization():
@@ -40,6 +46,14 @@ def test_capability_comparison():
     assert isinstance(missing, list)
 
 
+def test_model_tool_support_exposes_workspace_capabilities():
+    registry = AgentRegistry()
+    deepseek = registry.get_agent("deepseek")
+
+    assert Capability.FILE_EDIT in deepseek.get_capabilities_for_model("deepseek-v4-pro")
+    assert Capability.FILE_EDIT in deepseek.get_capabilities_for_model("deepseek-v4-flash")
+
+
 def test_model_tiers():
     registry = AgentRegistry()
     google = registry.get_agent("google")
@@ -65,3 +79,67 @@ def test_installed_agent_filtering():
     for a in ready:
         assert a in installed
 
+
+def test_cli_oauth_is_not_misreported_as_sdk_api_access(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "auth.json").write_text('{"auth_mode":"chatgpt","tokens":{"id_token":"x.y.z"}}')
+    gemini_dir = tmp_path / ".gemini"
+    gemini_dir.mkdir()
+    (gemini_dir / "google_accounts.json").write_text('{"active":"user@example.com"}')
+
+    openai = OpenAIAgent()
+    google = GoogleAgent()
+
+    assert openai.auth_method == "subscription"
+    assert google.auth_method == "oauth"
+    assert not openai.is_configured()
+    assert not google.is_configured()
+
+
+@pytest.mark.asyncio
+async def test_openai_tools_use_responses_api():
+    captured = {}
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                output_text="",
+                output=[SimpleNamespace(
+                    type="function_call",
+                    call_id="call-1",
+                    name="read_file",
+                    arguments='{"file_path":"README.md"}',
+                )],
+                usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+            )
+
+    agent = OpenAIAgent(api_key="test-key")
+    agent._client = SimpleNamespace(responses=FakeResponses())
+    events = [
+        event
+        async for event in agent.chat(
+            messages=[{"role": "user", "content": "Read it"}],
+            model="gpt-5.6-terra",
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }],
+            stream=True,
+        )
+    ]
+
+    assert captured["model"] == "gpt-5.6-terra"
+    assert captured["reasoning"] == {"effort": "medium"}
+    assert events[0].tool_name == "read_file"
+    assert events[0].args == {"file_path": "README.md"}

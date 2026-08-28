@@ -6,8 +6,10 @@ Access to over 100+ models from multiple companies through a single unified key.
 
 from __future__ import annotations
 
+import json
 import os
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from thwip.agents.base import (
     AgentDone,
@@ -43,24 +45,32 @@ class OpenRouterAgent(BaseAgent):
         Capability.FILE_EDIT,
         Capability.FILE_READ,
         Capability.CODE_RUN,
-        Capability.SEARCH,
+        Capability.TERMINAL,
+        Capability.GIT,
     }
 
     available_models = [
         ModelInfo(
-            id="anthropic/claude-3.7-sonnet",
-            name="Claude 3.7 Sonnet (via OpenRouter)",
-            context_window=200_000,
+            id="anthropic/claude-opus-5",
+            name="Claude Opus 5 (via OpenRouter)",
+            tier="flagship",
+            context_window=1_000_000,
+            max_output=128_000,
+            supports_tools=True,
+            supports_thinking=True,
             is_default=True,
-            pricing_input=3.0,
-            pricing_output=15.0,
+            pricing_input=5.0,
+            pricing_output=25.0,
         ),
         ModelInfo(
-            id="openai/gpt-4o",
-            name="GPT-4o (via OpenRouter)",
-            context_window=128_000,
-            pricing_input=2.5,
-            pricing_output=10.0,
+            id="openai/gpt-5.6-terra",
+            name="GPT-5.6 Terra (via OpenRouter)",
+            tier="balanced",
+            context_window=1_050_000,
+            supports_tools=True,
+            supports_thinking=True,
+            pricing_input=2.0,
+            pricing_output=12.0,
         ),
         ModelInfo(
             id="deepseek/deepseek-r1",
@@ -70,11 +80,15 @@ class OpenRouterAgent(BaseAgent):
             pricing_output=2.19,
         ),
         ModelInfo(
-            id="google/gemini-2.0-flash-001",
-            name="Gemini 2.0 Flash (via OpenRouter)",
-            context_window=1_000_000,
-            pricing_input=0.1,
-            pricing_output=0.4,
+            id="google/gemini-3.7-flash",
+            name="Gemini 3.7 Flash (via OpenRouter)",
+            tier="fast",
+            context_window=1_048_576,
+            max_output=65_536,
+            supports_tools=True,
+            supports_thinking=True,
+            pricing_input=0.375,
+            pricing_output=1.875,
         ),
     ]
 
@@ -97,7 +111,7 @@ class OpenRouterAgent(BaseAgent):
                     api_key=key or "dummy",
                     base_url="https://openrouter.ai/api/v1",
                     default_headers={
-                        "HTTP-Referer": "https://github.com/thwip-cli/thwip",
+                        "HTTP-Referer": "https://github.com/tanmayhutt/thwip-cli",
                         "X-Title": "thwip",
                     },
                 )
@@ -138,6 +152,8 @@ class OpenRouterAgent(BaseAgent):
 
         client = self._ensure_client()
         model = model or self.get_default_model()
+        if tools:
+            stream = False
 
         api_messages: list[dict[str, Any]] = []
         if system_prompt:
@@ -149,6 +165,8 @@ class OpenRouterAgent(BaseAgent):
             "messages": api_messages,
             "stream": stream,
         }
+        if tools:
+            kwargs["tools"] = tools
 
         try:
             if stream:
@@ -171,6 +189,13 @@ class OpenRouterAgent(BaseAgent):
                 msg = response.choices[0].message
                 if msg.content:
                     yield TextDelta(content=msg.content)
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        yield ToolUseStart(
+                            tool_id=tc.id,
+                            tool_name=tc.function.name,
+                            args=json.loads(tc.function.arguments) if tc.function.arguments else {},
+                        )
                 usage = response.usage
                 yield AgentDone(
                     usage=TokenUsage(

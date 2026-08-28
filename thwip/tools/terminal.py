@@ -59,7 +59,7 @@ class TerminalRunner:
             if err:
                 res_str += f"STDERR:\n{err}\n"
             return res_str.strip()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return f"Error: Command timed out after {timeout} seconds."
         except Exception as e:
             return f"Error executing command: {e}"

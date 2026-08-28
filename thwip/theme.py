@@ -8,22 +8,17 @@ adapts based on which agent is active and what capabilities it has.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
+from rich import box
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
-from rich.markdown import Markdown
 
 from thwip import __version__
-from rich.syntax import Syntax
-from rich import box
-
-if TYPE_CHECKING:
-    from thwip.agents.base import BaseAgent, Capability
-
 
 # ---------------------------------------------------------------------------
 # Company / Provider Brand Colors
@@ -209,7 +204,7 @@ def render_about_guide(
     content.append("  5. Quota Failover:   Catches HTTP 429 errors and offers immediate one-key fallback switching.\n\n", style="dim")
 
     content.append("NAVIGATION & COMMANDS\n", style="bold cyan")
-    content.append("  /switch <agent> [model]  Hot-swap active model mid-conversation (e.g. /switch google gemini-2.5-pro)\n", style="white")
+    content.append("  /switch <agent> [model]  Hot-swap active model mid-conversation (e.g. /switch google gemini-3.7-flash)\n", style="white")
     content.append("  /agents                  List all discovered agents, status, and capabilities\n", style="white")
     content.append("  /models [agent]          Show available models and context window limits\n", style="white")
     content.append("  /limits                  View live token counts, cumulative costs, and quotas\n", style="white")

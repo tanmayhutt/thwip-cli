@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 
 class FileEditor:
@@ -18,14 +17,22 @@ class FileEditor:
         self.project_path = Path(project_path).resolve()
 
     def _resolve_path(self, file_path: str) -> Path:
+        if not file_path or "\x00" in file_path:
+            raise ValueError("A valid project-relative path is required.")
         p = Path(file_path)
         if not p.is_absolute():
             p = self.project_path / p
-        return p.resolve()
+        resolved = p.resolve()
+        if resolved != self.project_path and self.project_path not in resolved.parents:
+            raise ValueError(f"Path '{file_path}' is outside the project workspace.")
+        return resolved
 
     def read_file(self, file_path: str, max_lines: int = 500) -> str:
         """Read content of a file."""
-        target = self._resolve_path(file_path)
+        try:
+            target = self._resolve_path(file_path)
+        except ValueError as exc:
+            return f"Error: {exc}"
         if not target.is_file():
             return f"Error: File '{file_path}' does not exist."
         try:
@@ -39,8 +46,8 @@ class FileEditor:
 
     def write_file(self, file_path: str, content: str) -> str:
         """Write/overwrite content to a file, creating parent directories if needed."""
-        target = self._resolve_path(file_path)
         try:
+            target = self._resolve_path(file_path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             return f"Successfully wrote {len(content.splitlines())} lines to '{file_path}'."
@@ -49,7 +56,10 @@ class FileEditor:
 
     def edit_file(self, file_path: str, old_str: str, new_str: str) -> str:
         """Replace exact target content with new content in a file."""
-        target = self._resolve_path(file_path)
+        try:
+            target = self._resolve_path(file_path)
+        except ValueError as exc:
+            return f"Error: {exc}"
         if not target.is_file():
             return f"Error: File '{file_path}' does not exist."
         try:
@@ -67,7 +77,10 @@ class FileEditor:
 
     def list_files(self, sub_dir: str = ".", max_entries: int = 100) -> str:
         """List files and directories within project."""
-        target = self._resolve_path(sub_dir)
+        try:
+            target = self._resolve_path(sub_dir)
+        except ValueError as exc:
+            return f"Error: {exc}"
         if not target.is_dir():
             return f"Error: Directory '{sub_dir}' does not exist."
         entries = []

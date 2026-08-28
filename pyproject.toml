@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "thwip-cli"
-version = "1.0.4"
+version = "1.1.0"
 description = "Universal coding agent multiplexer: detect, switch, and route between AI coding agents seamlessly"
 readme = "README.md"
 license = "MIT"
@@ -59,6 +59,11 @@ packages = ["thwip"]
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+
+[tool.ruff.lint]
+# Provider SDK boundaries intentionally normalize heterogeneous exceptions into
+# portable agent events. Mutable adapter metadata is class-level by design.
+ignore = ["BLE001", "PLW1510", "RUF012", "S110", "S112"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
