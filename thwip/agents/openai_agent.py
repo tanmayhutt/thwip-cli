@@ -157,10 +157,18 @@ class OpenAIAgent(BaseAgent):
     # --- Detection ---
 
     def is_installed(self) -> bool:
-        return self.is_configured() or any(
-            shutil.which(cmd) is not None
-            for cmd in ("codex", "openai")
-        )
+        """Check if Codex CLI, OpenAI CLI, or ChatGPT app is installed."""
+        if self.is_configured():
+            return True
+        if any(shutil.which(cmd) is not None for cmd in ("codex", "openai", "chatgpt")):
+            return True
+        app_paths = [
+            Path("/Applications/ChatGPT.app"),
+            Path("/Applications/OpenAI.app"),
+            Path.home() / "Applications" / "ChatGPT.app",
+            Path.home() / ".config" / "openai",
+        ]
+        return any(p.exists() for p in app_paths)
 
     def is_configured(self) -> bool:
         return bool(self._get_api_key())
@@ -168,11 +176,11 @@ class OpenAIAgent(BaseAgent):
     def get_install_info(self) -> dict[str, str]:
         info: dict[str, str] = {"method": "not installed", "path": "", "version": ""}
 
-        for cmd in ("codex", "openai"):
+        for cmd in ("codex", "openai", "chatgpt"):
             path = shutil.which(cmd)
             if path:
                 info["path"] = path
-                info["method"] = "npm global" if cmd == "codex" else "pip"
+                info["method"] = "CLI binary"
                 try:
                     result = subprocess.run(
                         [cmd, "--version"],
@@ -183,6 +191,20 @@ class OpenAIAgent(BaseAgent):
                 except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                     pass
                 break
+
+        # Also check for ChatGPT macOS app
+        if not info["path"]:
+            app_paths = [
+                Path("/Applications/ChatGPT.app"),
+                Path("/Applications/OpenAI.app"),
+                Path.home() / "Applications" / "ChatGPT.app",
+            ]
+            for app in app_paths:
+                if app.exists():
+                    info["method"] = "macOS app"
+                    info["path"] = str(app)
+                    info["version"] = "Installed"
+                    break
 
         return info
 

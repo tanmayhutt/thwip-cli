@@ -134,11 +134,20 @@ class GoogleAgent(BaseAgent):
     # --- Detection ---
 
     def is_installed(self) -> bool:
-        """Check if Gemini CLI, Antigravity, or API is configured."""
-        return self.is_configured() or any(
-            shutil.which(cmd) is not None
-            for cmd in ("gemini", "agy", "antigravity")
-        )
+        """Check if Gemini CLI, Antigravity IDE, or Gemini app is installed."""
+        if self.is_configured():
+            return True
+        if any(shutil.which(cmd) is not None for cmd in ("gemini", "agy", "antigravity")):
+            return True
+        app_paths = [
+            Path("/Applications/Antigravity IDE.app"),
+            Path("/Applications/Antigravity.app"),
+            Path("/Applications/Gemini.app"),
+            Path.home() / "Applications" / "Antigravity IDE.app",
+            Path.home() / "Applications" / "Antigravity.app",
+            Path.home() / ".gemini",
+        ]
+        return any(p.exists() for p in app_paths)
 
     def is_configured(self) -> bool:
         return bool(self._get_api_key())
@@ -150,7 +159,7 @@ class GoogleAgent(BaseAgent):
             path = shutil.which(cmd)
             if path:
                 info["path"] = path
-                info["method"] = "npm global" if cmd == "gemini" else "binary"
+                info["method"] = "CLI binary"
                 try:
                     result = subprocess.run(
                         [cmd, "--version"],
@@ -162,16 +171,20 @@ class GoogleAgent(BaseAgent):
                     pass
                 break
 
-        # Also check for Antigravity IDE (macOS app)
+        # Also check for Antigravity IDE or Gemini app (macOS app)
         if not info["path"]:
             app_paths = [
+                Path("/Applications/Antigravity IDE.app"),
                 Path("/Applications/Antigravity.app"),
+                Path("/Applications/Gemini.app"),
+                Path.home() / "Applications" / "Antigravity IDE.app",
                 Path.home() / "Applications" / "Antigravity.app",
             ]
             for app in app_paths:
                 if app.exists():
                     info["method"] = "macOS app"
                     info["path"] = str(app)
+                    info["version"] = "Installed"
                     break
 
         return info

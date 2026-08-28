@@ -97,6 +97,27 @@ KNOWN_CLI_TOOLS: list[dict[str, Any]] = [
 
 KNOWN_APPS: list[dict[str, Any]] = [
     {
+        "name": "Antigravity IDE",
+        "company": "Google",
+        "mac_path": "/Applications/Antigravity IDE.app",
+        "category": "IDE App",
+        "capabilities": ["Chat", "File Edit", "Terminal", "Browser", "Search"],
+    },
+    {
+        "name": "ChatGPT Desktop",
+        "company": "OpenAI",
+        "mac_path": "/Applications/ChatGPT.app",
+        "category": "Desktop App",
+        "capabilities": ["Chat", "Code Run", "Vision"],
+    },
+    {
+        "name": "Gemini Desktop",
+        "company": "Google",
+        "mac_path": "/Applications/Gemini.app",
+        "category": "Desktop App",
+        "capabilities": ["Chat", "Search", "Vision"],
+    },
+    {
         "name": "Cursor",
         "company": "Cursor Inc",
         "mac_path": "/Applications/Cursor.app",

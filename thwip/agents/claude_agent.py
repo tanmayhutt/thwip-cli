@@ -149,8 +149,17 @@ class ClaudeAgent(BaseAgent):
     # --- Detection ---
 
     def is_installed(self) -> bool:
-        """Check if Claude Code CLI is installed or configured."""
-        return shutil.which("claude") is not None or self.is_configured()
+        """Check if Claude Code CLI or Claude desktop app is installed or configured."""
+        if self.is_configured():
+            return True
+        if shutil.which("claude") is not None:
+            return True
+        app_paths = [
+            Path("/Applications/Claude.app"),
+            Path.home() / "Applications" / "Claude.app",
+            Path.home() / ".claude",
+        ]
+        return any(p.exists() for p in app_paths)
 
     def is_configured(self) -> bool:
         """Check if we have a valid Anthropic API key."""
@@ -166,7 +175,7 @@ class ClaudeAgent(BaseAgent):
         path = shutil.which("claude")
         if path:
             info["path"] = path
-            info["method"] = "npm global"  # Claude Code is typically installed via npm
+            info["method"] = "CLI binary"
 
             # Try to get version
             try:
@@ -178,6 +187,19 @@ class ClaudeAgent(BaseAgent):
                     info["version"] = result.stdout.strip().split("\n")[0]
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 pass
+
+        if not info["path"]:
+            app_paths = [
+                Path("/Applications/Claude.app"),
+                Path.home() / "Applications" / "Claude.app",
+                Path.home() / ".claude",
+            ]
+            for app in app_paths:
+                if app.exists():
+                    info["method"] = "macOS config" if app.name == ".claude" else "macOS app"
+                    info["path"] = str(app)
+                    info["version"] = "Installed"
+                    break
 
         self._install_cache = info
         return info

@@ -322,21 +322,32 @@ class ThwipCLI:
     async def cmd_switch(self, agent_name: str, model_id: str = "") -> None:
         """Switch to a different agent and/or model."""
         if not agent_name:
-            # Interactive selection
             agents = self.registry.list_agents()
-            console.print("\n[bold white]Select an agent to switch to:[/bold white]")
-            for i, a in enumerate(agents, 1):
+            console.print("\n[bold white]Available Coding Agents on Your Machine:[/bold white]")
+
+            # Group: Ready / Configured
+            ready_agents = [a for a in agents if a.is_configured()]
+            installed_agents = [a for a in agents if a.is_installed() and not a.is_configured()]
+            other_agents = [a for a in agents if not a.is_installed()]
+
+            ordered = ready_agents + installed_agents + other_agents
+
+            for i, a in enumerate(ordered, 1):
                 brand = get_brand(a.company)
-                status_str, _ = a.get_status_display()
-                caps_str = ", ".join(c.value for c in a.capabilities)
+                status_str, status_style = a.get_status_display()
+                install_info = a.get_install_info()
+                loc = f" ({install_info['path']})" if install_info.get("path") else ""
+
                 console.print(
                     f"  [bold white]{i}.[/bold white] [bold]{a.display_name}[/bold] "
-                    f"({a.company}) - [{status_str}] - [dim]{caps_str}[/dim]"
+                    f"({a.company}) - [{status_style}][{status_str}][/{status_style}][dim]{loc}[/dim]"
                 )
 
-            choice = input(f"\nEnter choice [1-{len(agents)}]: ").strip()
-            if choice.isdigit() and 1 <= int(choice) <= len(agents):
-                agent_name = agents[int(choice) - 1].name
+            choice = input(f"\nEnter choice [1-{len(ordered)}]: ").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(ordered):
+                agent_name = ordered[int(choice) - 1].name
+            elif choice.lower() in [a.name for a in agents]:
+                agent_name = choice.lower()
             else:
                 print_warning("Switch cancelled.")
                 return
@@ -363,7 +374,23 @@ class ThwipCLI:
                 unsupported=missing,
             )
         )
-        print_success(f"Now chatting with {new_agent.display_name} ({chosen_model}). Context preserved!")
+
+        if not new_agent.is_configured():
+            key_name = {
+                "google": "GEMINI_API_KEY",
+                "openai": "OPENAI_API_KEY",
+                "claude": "ANTHROPIC_API_KEY",
+                "deepseek": "DEEPSEEK_API_KEY",
+                "groq": "GROQ_API_KEY",
+                "openrouter": "OPENROUTER_API_KEY",
+            }.get(new_agent.name, "API_KEY")
+            print_warning(
+                f"Notice: {new_agent.display_name} was selected, but no API key was found.\n"
+                f"  Set your key with: export {key_name}=your_key_here\n"
+                f"  Or add it to ~/.thwip/config.toml"
+            )
+        else:
+            print_success(f"Now chatting with {new_agent.display_name} ({chosen_model}). Context preserved!")
 
     def cmd_show_agents(self) -> None:
         """Show table of all detected agents."""

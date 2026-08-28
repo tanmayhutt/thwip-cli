@@ -301,7 +301,7 @@ class BaseAgent(ABC):
         if not self.is_installed():
             return ("Not Installed", "dim")
         if not self.is_configured():
-            return ("No Key", "status.no_key")
+            return ("Installed (No Key)", "status.limited")
 
         limit = self.check_limits()
         if limit == LimitStatus.OK:
@@ -315,7 +315,7 @@ class BaseAgent(ABC):
         elif limit == LimitStatus.INVALID_KEY:
             return ("Invalid Key", "error")
         else:
-            return ("Unknown", "dim")
+            return ("Installed", "status.ready")
 
     def to_table_row(self) -> dict:
         """Convert to a dict suitable for render_agents_table()."""
