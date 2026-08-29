@@ -4,7 +4,7 @@ Main interactive terminal CLI for thwip.
 Universal coding agent multiplexer:
 - Dynamic UI adapting to agent capabilities
 - Seamless mid-conversation agent switching with context preservation
-- Auto-detection of all installed tools & subscriptions
+- Detection of supported installed tools and available credentials
 - Quota / rate limit exhaustion failover
 - Rich live markdown and tool execution
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import getpass
 import os
+import re
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -57,6 +58,15 @@ from thwip.theme import (
     render_startup_banner,
 )
 from thwip.tools import ToolManager
+
+
+class SafeFileHistory(FileHistory):
+    """Keep inline API-key commands out of persistent prompt history."""
+
+    def store_string(self, string: str) -> None:
+        if re.match(r"^\s*/(?:key|auth|config|k)\s+\S+\s+\S+", string, re.IGNORECASE):
+            return
+        super().store_string(string)
 
 
 class ThwipCLI:
@@ -127,9 +137,15 @@ class ThwipCLI:
         )
 
         # Setup prompt session
-        history_file = str(get_config_dir() / "history.txt")
+        history_path = get_config_dir() / "history.txt"
+        history_path.touch(mode=0o600, exist_ok=True)
+        try:
+            history_path.chmod(0o600)
+        except OSError:
+            pass
+        history_file = str(history_path)
         prompt_session: PromptSession = PromptSession(
-            history=FileHistory(history_file),
+            history=SafeFileHistory(history_file),
             completer=ThwipCompleter([a.name for a in self.registry.list_agents()]),
             key_bindings=create_keybindings(),
         )
@@ -177,7 +193,7 @@ class ThwipCLI:
 
     async def handle_command(self, cmd_line: str) -> str | None:
         """Handle slash commands."""
-        parts = cmd_line.split(" ", 2)
+        parts = cmd_line.split(maxsplit=2)
         cmd = parts[0].lower()
         arg1 = parts[1] if len(parts) > 1 else ""
         arg2 = parts[2] if len(parts) > 2 else ""
@@ -236,10 +252,20 @@ class ThwipCLI:
             elif sub == "load":
                 loaded = Session.load(arg2)
                 if loaded:
-                    self.session = loaded
+                    project = Path(loaded.project_path).expanduser().resolve()
+                    if not project.is_dir():
+                        print_error(f"Saved project directory '{loaded.project_path}' no longer exists.")
+                        return None
                     agent = self.registry.get_agent(loaded.current_agent)
-                    if agent:
-                        self.current_agent = agent
+                    if not agent:
+                        print_error(f"Saved agent '{loaded.current_agent}' is not available.")
+                        return None
+                    if not agent.get_model_info(loaded.current_model):
+                        loaded.current_model = agent.get_default_model()
+                        print_warning("The saved model is unavailable. Using the provider default.")
+                    self.session = loaded
+                    self.current_agent = agent
+                    self.tool_manager = ToolManager(str(project))
                     print_success(f"Loaded session '{loaded.name}' with {len(loaded.messages)} messages.")
                 else:
                     print_error(f"Session '{arg2}' not found.")
@@ -283,8 +309,8 @@ class ThwipCLI:
             ("edit_file", "Filesystem", "Structured string replacement in local files", "Active"),
             ("write_file", "Filesystem", "Create or overwrite full files", "Active"),
             ("list_dir", "Filesystem", "List directory tree and metadata", "Active"),
-            ("run_command", "Terminal", "Execute non-interactive shell commands safely", "Active"),
-            ("run_code", "Sandbox", "Run inline Python or Node.js code snippets", "Active"),
+            ("run_command", "Terminal", "Execute confirmed shell commands in the project", "Active"),
+            ("run_code", "Execution", "Run confirmed Python snippets with local user permissions", "Active"),
             ("git_status", "Version Control", "Inspect repository changes and staging", "Active"),
             ("git_diff", "Version Control", "View unified unstaged/staged diffs", "Active"),
         ]
@@ -415,7 +441,10 @@ class ThwipCLI:
                 f"  Or add it to ~/.thwip/config.toml"
             )
         else:
-            print_success(f"Now chatting with {new_agent.display_name} ({chosen_model}). Context preserved!")
+            print_success(
+                f"Now chatting with {new_agent.display_name} ({chosen_model}). "
+                "Portable text history preserved."
+            )
 
     def cmd_show_agents(self) -> None:
         """Show table of all detected agents."""
@@ -690,6 +719,8 @@ class ThwipCLI:
             if p.is_dir():
                 self.session.project_path = str(p)
                 self.tool_manager = ToolManager(str(p))
+                self.config.project = str(p)
+                self.config.save()
                 print_success(f"Project path changed to {p}")
             else:
                 print_error(f"Directory '{new_path}' does not exist.")
@@ -728,9 +759,9 @@ class ThwipCLI:
                     Text.from_markup(
                         f"[bold yellow]Missing API Key for {self.current_agent.display_name}[/bold yellow]\n\n"
                         f"An API key is required to send requests to [bold]{self.session.current_model}[/bold].\n\n"
-                        f"  • Configure key now:   [bold cyan]/key {self.current_agent.name}[/bold cyan]\n"
-                        f"  • Or set in shell:     [bold white]export {key_name}=your_key_here[/bold white]\n"
-                        f"  • Or switch agent:     [bold cyan]/switch[/bold cyan]"
+                        f"  - Configure key now:   [bold cyan]/key {self.current_agent.name}[/bold cyan]\n"
+                        f"  - Or set in shell:     [bold white]export {key_name}=your_key_here[/bold white]\n"
+                        f"  - Or switch agent:     [bold cyan]/switch[/bold cyan]"
                     ),
                     title="Setup Required",
                     border_style="yellow",
@@ -819,7 +850,8 @@ class ThwipCLI:
             if limit_hit or not tool_requests:
                 break
 
-            results = []
+            tool_call_messages = []
+            tool_result_messages = []
             for request in tool_requests:
                 display_args = {key: value for key, value in request.args.items() if key != "content"}
                 console.print(
@@ -835,15 +867,25 @@ class ThwipCLI:
                     if approved
                     else "Denied by user."
                 )
-                console.print(f"  [dim green]Result:[/dim green] [dim]{output[:500]}[/dim]")
-                results.append(f"Tool {request.tool_name} ({request.tool_id}) returned:\n{output}")
+                result_preview = Text("  Result: ", style="green")
+                result_preview.append(output[:500], style="dim")
+                console.print(result_preview)
+                tool_call_messages.append({
+                    "id": request.tool_id,
+                    "type": "function",
+                    "function": {"name": request.tool_name, "arguments": request.args},
+                })
+                tool_result_messages.append({
+                    "role": "tool",
+                    "tool_call_id": request.tool_id,
+                    "name": request.tool_name,
+                    "content": output,
+                })
 
-            assistant_note = round_text or "I requested one or more workspace tools."
-            working_messages.append({"role": "assistant", "content": assistant_note})
             working_messages.append({
-                "role": "user",
-                "content": "Workspace tool results follow. Continue the task using these results.\n\n" + "\n\n".join(results),
+                "role": "assistant", "content": round_text, "tool_calls": tool_call_messages,
             })
+            working_messages.extend(tool_result_messages)
         else:
             print_warning("Stopped after 8 consecutive tool rounds to prevent an infinite loop.")
 
@@ -855,18 +897,41 @@ class ThwipCLI:
                 company=self.current_agent.company,
                 tokens=total_tokens,
             )
+            if getattr(self.config, "auto_save", False):
+                if self.session.name == "new-session":
+                    self.session.name = f"session-{self.session.id}"
+                self.session.save()
 
     async def handle_limit_failover(self, event: LimitHit) -> None:
         """Handle rate limit or quota exhaustion with auto-suggested failover."""
+        if not self.config.fallback.enabled:
+            print_warning("Provider fallback is disabled in configuration.")
+            return
+
         # Find ready alternatives
         ready = self.registry.get_ready_agents()
         alternatives = []
-        for a in ready:
-            if a.name != self.current_agent.name:
+        seen: set[str] = set()
+        candidates: list[tuple[BaseAgent, str]] = []
+        for target in self.config.fallback.chain:
+            agent_name, separator, model = target.partition("/")
+            agent = self.registry.get_agent(agent_name)
+            if not agent or agent.name == self.current_agent.name or agent not in ready:
+                continue
+            chosen_model = model if separator and agent.get_model_info(model) else agent.get_default_model()
+            candidates.append((agent, chosen_model))
+            seen.add(agent.name)
+        candidates.extend(
+            (agent, agent.get_default_model())
+            for agent in ready
+            if agent.name != self.current_agent.name and agent.name not in seen
+        )
+
+        for a, chosen_model in candidates:
                 alternatives.append({
                     "agent": a.display_name,
                     "company": a.company,
-                    "model": a.get_default_model(),
+                    "model": chosen_model,
                     "capabilities": [c.value for c in a.capabilities],
                 })
 
@@ -883,7 +948,9 @@ class ThwipCLI:
             print_warning("No other configured agents found. Please add an API key or start Ollama.")
             return
 
-        choice = input("\nSwitch to alternative agent now? [1 to switch, Enter to cancel]: ").strip()
+        choice = "1" if self.config.limits.auto_switch else input(
+            "\nSwitch to alternative agent now? [1 to switch, Enter to cancel]: "
+        ).strip()
         if choice == "1" or choice.lower() == "y":
             target_alt = alternatives[0]
             for a in ready:

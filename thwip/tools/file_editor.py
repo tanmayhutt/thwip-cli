@@ -7,6 +7,7 @@ Read, write, edit, search files within the project working directory.
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 
@@ -49,7 +50,7 @@ class FileEditor:
         try:
             target = self._resolve_path(file_path)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            self._atomic_write(target, content)
             return f"Successfully wrote {len(content.splitlines())} lines to '{file_path}'."
         except Exception as e:
             return f"Error writing to file '{file_path}': {e}"
@@ -70,10 +71,31 @@ class FileEditor:
             if count > 1:
                 return f"Error: Target text found {count} times. Please specify a more unique target block."
             new_content = content.replace(old_str, new_str, 1)
-            target.write_text(new_content, encoding="utf-8")
+            self._atomic_write(target, new_content)
             return f"Successfully updated '{file_path}'."
         except Exception as e:
             return f"Error editing file '{file_path}': {e}"
+
+    @staticmethod
+    def _atomic_write(target: Path, content: str) -> None:
+        """Replace a file atomically so interrupted writes cannot corrupt it."""
+        temporary_path: Path | None = None
+        existing_mode = target.stat().st_mode & 0o777 if target.exists() else None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=target.parent,
+                prefix=f".{target.name}-", suffix=".tmp", delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                temporary.write(content)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            if existing_mode is not None:
+                temporary_path.chmod(existing_mode)
+            temporary_path.replace(target)
+        finally:
+            if temporary_path and temporary_path.exists():
+                temporary_path.unlink()
 
     def list_files(self, sub_dir: str = ".", max_entries: int = 100) -> str:
         """List files and directories within project."""

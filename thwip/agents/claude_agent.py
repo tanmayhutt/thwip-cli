@@ -313,11 +313,37 @@ class ClaudeAgent(BaseAgent):
         if tools:
             stream = False
 
+        # Convert the portable OpenAI-style tool transcript into Anthropic blocks.
+        anthropic_messages: list[dict[str, Any]] = []
+        for message in messages:
+            if message.get("tool_calls"):
+                blocks: list[dict[str, Any]] = []
+                if message.get("content"):
+                    blocks.append({"type": "text", "text": message["content"]})
+                for call in message["tool_calls"]:
+                    function = call["function"]
+                    arguments = function.get("arguments", {})
+                    blocks.append({
+                        "type": "tool_use", "id": call["id"], "name": function["name"],
+                        "input": json.loads(arguments) if isinstance(arguments, str) else arguments,
+                    })
+                anthropic_messages.append({"role": "assistant", "content": blocks})
+            elif message.get("role") == "tool":
+                anthropic_messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result", "tool_use_id": message["tool_call_id"],
+                        "content": message.get("content", ""),
+                    }],
+                })
+            else:
+                anthropic_messages.append(message)
+
         # Build request kwargs
         model_info = self.get_model_info(model)
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": anthropic_messages,
             "max_tokens": model_info.max_output if model_info else 16_384,
         }
 

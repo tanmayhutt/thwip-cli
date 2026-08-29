@@ -286,22 +286,43 @@ class GoogleAgent(BaseAgent):
         client = self._ensure_client()
         model = model or self.get_default_model()
 
+        from google.genai import types
+
         # Convert messages to Gemini format
         gemini_contents = []
         for msg in messages:
-            role = "user" if msg["role"] == "user" else "model"
-            gemini_contents.append({
-                "role": role,
-                "parts": [{"text": msg["content"]}],
-            })
+            if msg.get("tool_calls"):
+                parts = []
+                if msg.get("content"):
+                    parts.append(types.Part.from_text(text=msg["content"]))
+                for call in msg["tool_calls"]:
+                    function = call["function"]
+                    arguments = function.get("arguments", {})
+                    if isinstance(arguments, str):
+                        arguments = json.loads(arguments)
+                    parts.append(types.Part.from_function_call(
+                        name=function["name"], args=arguments,
+                    ))
+                gemini_contents.append(types.Content(role="model", parts=parts))
+            elif msg.get("role") == "tool":
+                gemini_contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_function_response(
+                        name=msg.get("name", "tool"),
+                        response={"result": msg.get("content", "")},
+                    )],
+                ))
+            else:
+                role = "user" if msg["role"] == "user" else "model"
+                gemini_contents.append(types.Content(
+                    role=role, parts=[types.Part.from_text(text=msg["content"])],
+                ))
 
         config: dict[str, Any] = {}
         if system_prompt:
             config["system_instruction"] = system_prompt
 
         try:
-            from google.genai import types
-
             if tools:
                 declarations = []
                 for tool in tools:

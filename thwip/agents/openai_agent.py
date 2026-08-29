@@ -362,9 +362,31 @@ class OpenAIAgent(BaseAgent):
                         "description": function.get("description", ""),
                         "parameters": function.get("parameters", {}),
                     })
+                response_input: list[dict[str, Any]] = []
+                for message in api_messages:
+                    if message.get("tool_calls"):
+                        if message.get("content"):
+                            response_input.append({"role": "assistant", "content": message["content"]})
+                        for call in message["tool_calls"]:
+                            function = call["function"]
+                            arguments = function.get("arguments", {})
+                            response_input.append({
+                                "type": "function_call", "call_id": call["id"],
+                                "name": function["name"],
+                                "arguments": arguments if isinstance(arguments, str) else json.dumps(arguments),
+                            })
+                    elif message.get("role") == "tool":
+                        response_input.append({
+                            "type": "function_call_output",
+                            "call_id": message["tool_call_id"],
+                            "output": message.get("content", ""),
+                        })
+                    else:
+                        response_input.append(message)
+
                 response_kwargs: dict[str, Any] = {
                     "model": model,
-                    "input": api_messages,
+                    "input": response_input,
                     "max_output_tokens": model_info.max_output if model_info else 16_384,
                 }
                 if response_tools:

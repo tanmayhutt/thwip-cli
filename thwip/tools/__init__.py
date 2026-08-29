@@ -217,22 +217,28 @@ class ToolManager:
     def execute_tool(self, tool_name: str, args: dict[str, Any]) -> str:
         """Execute a tool by name with arguments and return output."""
         if tool_name == "read_file":
-            return self.file_editor.read_file(args.get("file_path", ""))
+            result = self.file_editor.read_file(args.get("file_path", ""))
         elif tool_name == "write_file":
-            return self.file_editor.write_file(args.get("file_path", ""), args.get("content", ""))
+            result = self.file_editor.write_file(args.get("file_path", ""), args.get("content", ""))
         elif tool_name == "edit_file":
-            return self.file_editor.edit_file(
+            result = self.file_editor.edit_file(
                 args.get("file_path", ""), args.get("old_str", ""), args.get("new_str", "")
             )
         elif tool_name == "run_command":
-            return self.terminal.run_command(args.get("command", ""))
+            result = self.terminal.run_command(args.get("command", ""))
         elif tool_name == "list_files":
-            return self.file_editor.list_files(args.get("sub_dir", "."))
+            result = self.file_editor.list_files(args.get("sub_dir", "."))
         elif tool_name == "git_status":
-            return self.git.status()
+            result = self.git.status()
         elif tool_name == "git_diff":
-            return self.git.diff(args.get("staged", False))
+            result = self.git.diff(args.get("staged", False))
         elif tool_name == "run_python":
-            return self.code_runner.run_python(args.get("code", ""))
+            result = self.code_runner.run_python(args.get("code", ""))
         else:
-            return f"Error: Unknown tool '{tool_name}'."
+            result = f"Error: Unknown tool '{tool_name}'."
+
+        max_chars = 20_000
+        if len(result) > max_chars:
+            omitted = len(result) - max_chars
+            return f"{result[:max_chars]}\n\n[Output truncated: {omitted} characters omitted]"
+        return result

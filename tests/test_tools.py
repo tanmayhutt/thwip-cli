@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import tempfile
 
+import pytest
+
 from thwip.tools import ToolManager
+from thwip.tools.terminal import TerminalRunner
 
 
 def test_file_editor_operations():
@@ -49,3 +52,21 @@ def test_file_editor_blocks_paths_outside_workspace(tmp_path):
     assert "outside the project workspace" in manager.file_editor.read_file(str(outside))
     assert "outside the project workspace" in manager.file_editor.write_file("../outside.txt", "changed")
     assert outside.read_text() == "private"
+
+
+def test_tool_output_is_bounded(tmp_path):
+    manager = ToolManager(project_path=tmp_path)
+    (tmp_path / "large.txt").write_text("x" * 25_000)
+
+    result = manager.execute_tool("read_file", {"file_path": "large.txt", "max_lines": 1})
+
+    assert len(result) <= 20_100
+    assert "Output truncated" in result
+
+
+@pytest.mark.asyncio
+async def test_async_command_timeout_terminates_process(tmp_path):
+    runner = TerminalRunner(tmp_path)
+    result = await runner.run_command_async("sleep 5", timeout=0.01)
+
+    assert "timed out" in result

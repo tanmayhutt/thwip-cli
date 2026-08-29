@@ -2,7 +2,7 @@
 
 > Universal Coding Agent Multiplexer
 > 
-> Detect all installed AI coding agents on your device, combine them in a unified terminal interface, and hot-swap models mid-conversation when hitting rate limits without losing context.
+> Discover supported local AI tools, connect configured model providers in one terminal interface, and switch providers while preserving completed text conversation history.
 
 ---
 

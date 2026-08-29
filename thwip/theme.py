@@ -199,7 +199,7 @@ def render_about_guide(
     content.append("  1. Auto-Detection:   Scans environment variables, local CLI agents, and existing credentials\n", style="dim")
     content.append("                       in ~/.claude.json, ~/.gemini/config.json, ~/.config/openai/, or Ollama.\n", style="dim")
     content.append("  2. Unified State:    Maintains conversation history and tool outputs in a portable format.\n", style="dim")
-    content.append("  3. Hot-Swapping:     Switch models mid-conversation with zero context loss.\n", style="dim")
+    content.append("  3. Hot-Swapping:     Switch models with completed text history preserved.\n", style="dim")
     content.append("  4. Universal Tools:  Provides safe file editing, shell commands, execution, and git operations.\n", style="dim")
     content.append("  5. Quota Failover:   Catches HTTP 429 errors and offers immediate one-key fallback switching.\n\n", style="dim")
 

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from thwip.agents.base import AgentDone, Capability, TextDelta, ToolUseStart
-from thwip.cli import ThwipCLI
+from thwip.cli import SafeFileHistory, ThwipCLI
 from thwip.session import Session
 from thwip.tools import ToolManager
 
@@ -44,6 +44,10 @@ class ToolCallingAgent:
             yield ToolUseStart(tool_id="read-1", tool_name="read_file", args={"file_path": "note.txt"})
             yield AgentDone()
         else:
+            assert messages[-2]["role"] == "assistant"
+            assert messages[-2]["tool_calls"][0]["id"] == "read-1"
+            assert messages[-1]["role"] == "tool"
+            assert messages[-1]["tool_call_id"] == "read-1"
             assert "known result" in messages[-1]["content"]
             yield TextDelta(content="Used the tool result.")
             yield AgentDone()
@@ -94,3 +98,15 @@ def test_inline_api_key_is_rejected():
 
     assert cli.config.keys == {}
     assert cli.config.key_sources == {}
+
+
+def test_inline_api_key_is_not_stored_in_prompt_history(tmp_path):
+    history_path = tmp_path / "history.txt"
+    history = SafeFileHistory(str(history_path))
+
+    history.store_string("/key openai secret-value")
+    history.store_string("/key openai")
+
+    contents = history_path.read_text()
+    assert "secret-value" not in contents
+    assert "/key openai" in contents

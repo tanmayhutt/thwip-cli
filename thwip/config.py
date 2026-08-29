@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,11 @@ def get_config_dir() -> Path:
 def get_sessions_dir() -> Path:
     """Return ~/.thwip/sessions/, creating it if needed."""
     d = get_config_dir() / "sessions"
-    d.mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        d.chmod(0o700)
+    except OSError:
+        pass
     return d
 
 
@@ -158,7 +163,12 @@ def get_key_sources() -> dict[str, str]:
             if path.is_file():
                 try:
                     data = json.loads(path.read_text())
-                    if data.get(agent_conf["key_field"]):
+                    key_field = agent_conf["key_field"]
+                    value = data.get(key_field, "") if isinstance(data, dict) else ""
+                    credentials = data.get("credentials", {}) if isinstance(data, dict) else {}
+                    if not value and isinstance(credentials, dict):
+                        value = credentials.get(key_field, "")
+                    if value:
                         sources[provider] = str(path)
                         break
                 except (json.JSONDecodeError, OSError):
@@ -317,7 +327,12 @@ class ThwipConfig:
                 "auto_save": self.auto_save,
                 "confirm_tools": self.confirm_tools,
             },
-            "keys": {k: v for k, v in self.keys.items()},
+            # Never persist keys discovered from environment variables or another
+            # application's config. Only values explicitly stored in thwip belong here.
+            "keys": {
+                k: v for k, v in self.keys.items()
+                if self.key_sources.get(k) == "config.toml"
+            },
             "ollama": {
                 "host": self.ollama_host,
             },
@@ -342,12 +357,20 @@ class ThwipConfig:
         }
 
         config_path = get_config_path()
-        with open(config_path, "wb") as f:
-            tomli_w.dump(data, f)
+        temporary_path: Path | None = None
         try:
-            config_path.chmod(0o600)
-        except OSError:
-            pass
+            with tempfile.NamedTemporaryFile(
+                mode="wb", dir=config_path.parent, prefix=".config-", delete=False
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                os.chmod(temporary.name, 0o600)
+                tomli_w.dump(data, temporary)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            temporary_path.replace(config_path)
+        finally:
+            if temporary_path and temporary_path.exists():
+                temporary_path.unlink()
 
     def get_key(self, provider: str) -> str | None:
         """Get API key for a provider, returning None if not found."""

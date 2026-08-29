@@ -7,7 +7,9 @@ Enables seamless context portability across agent switches without losing histor
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -127,10 +129,21 @@ class Session:
             "updated_at": self.updated_at,
             "messages": [m.to_dict() for m in self.messages],
         }
-        temporary_path = file_path.with_suffix(".json.tmp")
-        temporary_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        temporary_path.chmod(0o600)
-        temporary_path.replace(file_path)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=sessions_dir,
+                prefix=f".{self.name}-", suffix=".tmp", delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                os.chmod(temporary.name, 0o600)
+                json.dump(data, temporary, indent=2)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            temporary_path.replace(file_path)
+        finally:
+            if temporary_path and temporary_path.exists():
+                temporary_path.unlink()
         return file_path
 
     @classmethod

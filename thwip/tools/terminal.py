@@ -42,6 +42,7 @@ class TerminalRunner:
 
     async def run_command_async(self, command: str, timeout: int = 30) -> str:
         """Run a shell command asynchronously."""
+        proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -60,6 +61,9 @@ class TerminalRunner:
                 res_str += f"STDERR:\n{err}\n"
             return res_str.strip()
         except TimeoutError:
+            if proc and proc.returncode is None:
+                proc.kill()
+                await proc.communicate()
             return f"Error: Command timed out after {timeout} seconds."
         except Exception as e:
             return f"Error executing command: {e}"
