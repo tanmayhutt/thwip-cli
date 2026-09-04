@@ -98,6 +98,17 @@ class OllamaAgent(BaseAgent):
     def is_installed(self) -> bool:
         return shutil.which("ollama") is not None or self._is_server_reachable()
 
+    def get_handoff_models(self) -> list[ModelInfo]:
+        """Never query even a remote configured Ollama host during a preview."""
+        if self._cached_models is not None:
+            return list(self._cached_models)
+        return [
+            ModelInfo(id="llama3.3", name="Llama 3.3", is_default=True),
+            ModelInfo(id="qwen2.5-coder", name="Qwen 2.5 Coder"),
+            ModelInfo(id="deepseek-r1", name="DeepSeek R1 Distill"),
+            ModelInfo(id="codellama", name="CodeLlama"),
+        ]
+
     def _is_server_reachable(self) -> bool:
         try:
             req = urllib.request.Request(f"{self.host}/api/tags")

@@ -67,6 +67,7 @@ async def test_tool_results_are_returned_to_agent(tmp_path):
 
     assert len(cli.current_agent.calls) == 2
     assert cli.session.messages[-1].content == "Used the tool result."
+    assert cli.session.observed_tool_results == 1
 
 
 class UnconfiguredAgent(ToolCallingAgent):

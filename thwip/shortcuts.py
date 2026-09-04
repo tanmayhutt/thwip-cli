@@ -9,6 +9,7 @@ from prompt_toolkit.key_binding import KeyBindings
 
 SLASH_COMMANDS = [
     ("/switch", "Switch agent and model mid-conversation"),
+    ("/handoff", "Preview context transfer, losses, and model fit locally"),
     ("/agents", "Show all detected coding agents & status"),
     ("/models", "List available models for current agent"),
     ("/status", "Display current session and agent info"),
@@ -41,12 +42,12 @@ class ThwipCompleter(Completer):
                     yield Completion(cmd, start_position=-len(text), display_meta=desc)
 
             # /switch <agent> autocompletion
-            if text.startswith("/switch "):
+            if text.startswith(("/switch ", "/handoff ")):
                 parts = text.split(" ")
                 prefix = parts[1] if len(parts) > 1 else ""
                 for name in self.agent_names:
                     if name.startswith(prefix):
-                        yield Completion(f"/switch {name}", start_position=-len(text), display_meta="Agent")
+                        yield Completion(f"{parts[0]} {name}", start_position=-len(text), display_meta="Agent")
 
 
 def create_keybindings(on_switch=None, on_status=None, on_history=None) -> KeyBindings:

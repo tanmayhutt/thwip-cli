@@ -298,6 +298,10 @@ class BaseAgent(ABC):
                 return m
         return None
 
+    def get_handoff_models(self) -> list[ModelInfo]:
+        """Return local catalog metadata without requesting provider discovery."""
+        return list(self.available_models)
+
     def has_capability(self, cap: Capability) -> bool:
         """Check if this agent supports a capability."""
         return cap in self.capabilities

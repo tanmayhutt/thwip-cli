@@ -38,6 +38,7 @@ from thwip.agents.base import (
 )
 from thwip.config import ThwipConfig, get_config_dir
 from thwip.detector import SystemDetector
+from thwip.handoff import build_handoff_report, local_capabilities, local_model
 from thwip.limits import UsageTracker
 from thwip.session import Session
 from thwip.shortcuts import ThwipCompleter, create_keybindings
@@ -210,6 +211,9 @@ class ThwipCLI:
         elif cmd in ("/switch", "/s"):
             await self.cmd_switch(arg1, arg2)
 
+        elif cmd == "/handoff":
+            self.cmd_handoff(arg1, arg2)
+
         elif cmd in ("/agents", "/list", "/a"):
             self.cmd_show_agents()
 
@@ -235,7 +239,7 @@ class ThwipCLI:
             self.cmd_show_history()
 
         elif cmd in ("/clear", "/reset"):
-            self.session.messages.clear()
+            self.session.clear_context()
             print_info("Conversation history cleared.")
 
         elif cmd == "/cost":
@@ -272,7 +276,7 @@ class ThwipCLI:
             elif sub == "list":
                 self.cmd_list_sessions()
             elif sub == "clear":
-                self.session.messages.clear()
+                self.session.clear_context()
                 print_info("Conversation history cleared.")
             else:
                 print_info("Usage: /session [save|load|list|clear] [name]")
@@ -326,7 +330,8 @@ class ThwipCLI:
 
         commands = [
             ("/about", "Display full About section, architecture, and navigation guide"),
-            ("/switch [agent] [model]", "Switch active agent/model mid-conversation without losing context"),
+            ("/switch [agent] [model]", "Switch provider with a text-continuity report"),
+            ("/handoff [agent] [model]", "Preview transfer losses and context pressure without switching"),
             ("/agents", "Show all detected coding agents, company status & capabilities"),
             ("/models [agent|tier]", "List models filtered by provider or tier (flagship, balanced, fast)"),
             ("/key [provider]", "Securely enter an API key without storing it in terminal history"),
@@ -349,6 +354,54 @@ class ThwipCLI:
         for c, d in commands:
             table.add_row(c, d)
         console.print(table)
+
+    def cmd_handoff(self, agent_name: str = "", model_id: str = "") -> None:
+        """Preview any catalogued target without requiring credentials or API calls."""
+        target = self.registry.get_agent(agent_name) if agent_name else self.current_agent
+        if target is None:
+            print_error(f"Unknown agent '{agent_name}'.")
+            return
+        models = target.get_handoff_models()
+        default = next((model.id for model in models if model.is_default), models[0].id if models else "")
+        chosen = model_id or (self.session.current_model if not agent_name else default)
+        if local_model(target, chosen) is None:
+            print_error(f"Unknown model '{chosen}' for {target.display_name}.")
+            return
+        caps = local_capabilities(target, chosen)
+        tools = None
+        if Capability.FILE_EDIT in caps:
+            tools = (
+                self.tool_manager.get_anthropic_tools() if target.name == "claude"
+                else self.tool_manager.get_openai_tools()
+            )
+        report = build_handoff_report(self.session, self.current_agent, target, chosen, tools)
+        table = Table(title="Handoff Preview (local only)", box=box.ROUNDED)
+        table.add_column("Check", style="cyan")
+        table.add_column("Result")
+        rows = [
+            ("Route", f"{report.source} -> {report.target}"),
+            ("Preserved", f"{report.transferred_messages} user/assistant text messages + system prompt"),
+            ("Excluded records", (f"{report.excluded_messages} non-text-history messages; "
+             f"{report.excluded_tool_calls} stored tool-call entries")),
+            ("Transient results", f"{report.observed_tool_results} observed tool results not transferred"),
+            ("Tracking coverage", "Since session creation" if report.tracking_complete
+             else "Partial: legacy session has uncounted earlier tool results"),
+            ("Capabilities lost", ", ".join(report.lost_capabilities) or "None in local catalog"),
+            ("Capabilities gained", ", ".join(report.gained_capabilities) or "None in local catalog"),
+            ("Context pressure", (f"{report.context_pressure}: ~{report.estimated_input_tokens:,} input "
+             f"+ {report.output_reserve:,} advisory output reserve / "
+             f"{report.context_window or 'unknown'} catalog tokens")),
+            ("Text SHA-256", report.text_fingerprint),
+        ]
+        for label, value in rows:
+            table.add_row(Text(label), Text(value))
+        console.print(table)
+        console.print(Text(
+            "Advisory only: token estimates and catalog limits can differ from provider behavior. "
+            "Hidden reasoning and provider-native state do not transfer. Working files stay on disk; "
+            "they are not uploaded by this preview. The fingerprint checks text equality, not delivery. "
+            "No model calls, trimming, or switching were performed by the preview.", style="dim",
+        ))
 
     async def cmd_switch(self, agent_name: str, model_id: str = "") -> None:
         """Switch to a different agent and/or model."""
@@ -407,6 +460,8 @@ class ThwipCLI:
 
         old_agent = self.current_agent
         old_caps = old_agent.get_capabilities_for_model(self.session.current_model)
+
+        self.cmd_handoff(new_agent.name, chosen_model)
 
         self.current_agent = new_agent
         self.session.switch_agent(new_agent.name, chosen_model)
@@ -867,6 +922,7 @@ class ThwipCLI:
                     if approved
                     else "Denied by user."
                 )
+                self.session.record_tool_result()
                 result_preview = Text("  Result: ", style="green")
                 result_preview.append(output[:500], style="dim")
                 console.print(result_preview)

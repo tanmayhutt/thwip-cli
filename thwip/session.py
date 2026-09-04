@@ -1,7 +1,7 @@
 """
 Session & conversation state manager for thwip.
 
-Enables seamless context portability across agent switches without losing history.
+Preserves conversational text across provider switches, not native reasoning state.
 """
 
 from __future__ import annotations
@@ -63,6 +63,20 @@ class Session:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     messages: list[Message] = field(default_factory=list)
+    observed_tool_results: int = 0
+    tool_tracking_complete: bool = True
+
+    def clear_context(self) -> None:
+        """Clear text and its associated handoff accounting together."""
+        self.messages.clear()
+        self.observed_tool_results = 0
+        self.tool_tracking_complete = True
+        self.updated_at = time.time()
+
+    def record_tool_result(self) -> None:
+        """Count transient results without persisting potentially sensitive outputs."""
+        self.observed_tool_results += 1
+        self.updated_at = time.time()
 
     def add_user_message(self, content: str) -> Message:
         msg = Message(role="user", content=content)
@@ -102,7 +116,7 @@ class Session:
         return portable
 
     def switch_agent(self, agent_name: str, model: str) -> None:
-        """Switch current agent and model while preserving full history."""
+        """Switch current agent and model while preserving stored text history."""
         self.current_agent = agent_name
         self.current_model = model
         self.updated_at = time.time()
@@ -128,6 +142,8 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "messages": [m.to_dict() for m in self.messages],
+            "observed_tool_results": self.observed_tool_results,
+            "tool_tracking_complete": self.tool_tracking_complete,
         }
         temporary_path: Path | None = None
         try:
@@ -180,6 +196,8 @@ class Session:
                 created_at=data.get("created_at", time.time()),
                 updated_at=data.get("updated_at", time.time()),
                 messages=[Message.from_dict(m) for m in data.get("messages", [])],
+                observed_tool_results=data.get("observed_tool_results", 0),
+                tool_tracking_complete=data.get("tool_tracking_complete", False),
             )
             return session
         except Exception:

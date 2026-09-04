@@ -9,7 +9,8 @@
 ## Features
 
 - **Auto-Detection**: Discovers installed AI coding agents (Claude Code, Antigravity, Gemini CLI, OpenAI/Codex, Aider, Copilot, Cursor, Windsurf, Cline, Ollama) and configured credentials.
-- **Context Portability**: Switch between Anthropic Claude, Google Gemini, OpenAI Codex, or local Ollama mid-project. Conversation history and working files transfer directly.
+- **Context Portability**: Switch providers with stored conversational text. Working files remain in the selected local project; they are not automatically uploaded.
+- **Handoff Preview**: Inspect text continuity, omitted state, capability changes, approximate context pressure, and a text fingerprint before switching. Runs locally without model calls.
 - **Dynamic UI**: Terminal interface adapts its status bar, capabilities, and theme based on the active provider.
 - **Capability Disclaimers**: Highlights when an agent lacks specific capabilities such as file editing or code execution.
 - **Rate Limit Failover**: Detects HTTP 429 errors or quota exhaustion and prompts instant switching to ready fallback models.
@@ -52,6 +53,7 @@ thwip
 | Command | Action |
 |:---|:---|
 | `/switch [agent] [model]` | Switch active agent or model mid-conversation |
+| `/handoff [agent] [model]` | Preview a target locally without switching or sending data |
 | `/agents` | Show all detected coding agents, company status, and capabilities |
 | `/models [agent]` | List available models for current or target agent |
 | `/key [provider]` | Enter an API key securely without placing it in prompt history |
@@ -73,6 +75,39 @@ Short aliases are available for frequent commands: `/a`, `/m`, `/s`, `/k`, `/g`,
 | `/quit` | Exit thwip |
 
 ---
+
+## Auditable handoffs
+
+```text
+/handoff
+/handoff google
+/handoff openai gpt-5.6-terra
+```
+
+`/handoff` previews the current target; specifying a provider uses its default model
+unless you supply a model ID. Targets can be inspected without credentials or an
+installed provider. `/switch` shows the same report before changing the active agent.
+
+The report includes:
+
+- Exact counts of transferred user/assistant text messages and excluded stored records.
+- A count of observed transient tool results that are not in portable history. New
+  sessions track from creation; older saved sessions explicitly report partial coverage.
+- Capability gains and losses using the local model catalog.
+- Approximate request size including tool schemas, with up to 4,096 tokens reserved
+  for an answer in the advisory calculation. This does not change generation settings.
+- SHA-256 of canonical system-prompt and conversational-text JSON. It stays the same
+  across targets when that text is unchanged. Tool schemas and attribution metadata
+  are intentionally outside this text fingerprint.
+
+The preview makes no model requests, saves no transcript exports, executes no tools,
+and does not trim or summarize history. Token sizing uses UTF-8 bytes divided by four
+plus per-message overhead, not a provider tokenizer. Catalog limits can be stale;
+an apparently fitting request can still fail. Warnings are advisory, not switch gates.
+Hidden reasoning and provider-native state do not transfer. The digest proves neither
+delivery nor semantic understanding, and is not a signature or privacy guarantee.
+
+See [research and prior art](docs/handoff-research.md) for the differentiation rationale.
 
 ## Supported Companies and Agents
 
