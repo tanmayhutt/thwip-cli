@@ -316,7 +316,10 @@ class ClaudeAgent(BaseAgent):
         # Convert the portable OpenAI-style tool transcript into Anthropic blocks.
         anthropic_messages: list[dict[str, Any]] = []
         for message in messages:
-            if message.get("tool_calls"):
+            native = message.get("_native_state", {}).get("claude")
+            if native is not None:
+                anthropic_messages.append({"role": "assistant", "content": native})
+            elif message.get("tool_calls"):
                 blocks: list[dict[str, Any]] = []
                 if message.get("content"):
                     blocks.append({"type": "text", "text": message["content"]})
@@ -402,6 +405,8 @@ class ClaudeAgent(BaseAgent):
                             args=block.input,
                         )
                 yield AgentDone(
+                    native_state={"claude": [block.model_dump() if hasattr(block, "model_dump") else vars(block)
+                                               for block in response.content]},
                     usage=TokenUsage(
                         input_tokens=response.usage.input_tokens,
                         output_tokens=response.usage.output_tokens,

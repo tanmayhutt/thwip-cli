@@ -76,6 +76,30 @@ class UnconfiguredAgent(ToolCallingAgent):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("arguments", [None, [], "bad", {"file_path": "[broken]"}])
+async def test_invalid_tool_arguments_return_errors_without_crashing(tmp_path, arguments):
+    class InvalidToolAgent(ToolCallingAgent):
+        async def chat(self, messages, **kwargs):
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                yield ToolUseStart(tool_id="bad", tool_name="read_file", args=arguments)
+                yield AgentDone()
+            else:
+                assert "Error" in messages[-1]["content"]
+                yield TextDelta(content="Recovered from invalid tool arguments.")
+                yield AgentDone()
+
+    cli = ThwipCLI.__new__(ThwipCLI)
+    cli.config = SimpleNamespace(stream=True, confirm_tools=True)
+    cli.session = Session(current_agent="fake", current_model="fake-model")
+    cli.current_agent = InvalidToolAgent()
+    cli.tool_manager = ToolManager(tmp_path)
+    cli.usage_tracker = FakeUsageTracker()
+    await cli.process_user_message("Read")
+    assert cli.session.messages[-1].content == "Recovered from invalid tool arguments."
+
+
+@pytest.mark.asyncio
 async def test_unconfigured_agent_shows_setup_guidance(tmp_path):
     cli = ThwipCLI.__new__(ThwipCLI)
     cli.config = SimpleNamespace(stream=True, confirm_tools=True)

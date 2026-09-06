@@ -26,6 +26,7 @@ from thwip.agents.base import (
     TokenUsage,
     ToolUseStart,
 )
+from thwip.agents.chat_messages import serialize_chat_messages
 
 
 class GroqAgent(BaseAgent):
@@ -53,18 +54,19 @@ class GroqAgent(BaseAgent):
     available_models = [
         ModelInfo(
             id="llama-3.3-70b-versatile",
-            name="Llama 3.3 70B (Versatile)",
+            name="Llama 3.3 70B (enterprise legacy only)",
             context_window=128_000,
             max_output=32_768,
             supports_tools=True,
             supports_streaming=True,
-            is_default=True,
+            is_default=False,
             pricing_input=0.59,
             pricing_output=0.79,
         ),
         ModelInfo(
             id="openai/gpt-oss-120b",
             name="GPT-OSS 120B",
+            is_default=True,
             tier="balanced",
             context_window=131_072,
             max_output=65_536,
@@ -141,7 +143,7 @@ class GroqAgent(BaseAgent):
         api_messages: list[dict[str, Any]] = []
         if system_prompt:
             api_messages.append({"role": "system", "content": system_prompt})
-        api_messages.extend(messages)
+        api_messages.extend(serialize_chat_messages(messages))
 
         kwargs: dict[str, Any] = {
             "model": model,

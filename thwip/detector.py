@@ -12,6 +12,7 @@ Scans the local machine for:
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -175,7 +176,7 @@ class SystemDetector:
             config_source = ""
 
             # Check environment variables
-            if spec.get("key_env") and os.environ.get(spec["key_env"]):
+            if spec.get("key_env") and os.environ.get(spec["key_env"], "").strip():
                 is_configured = True
                 config_source = f"env:{spec['key_env']}"
 
@@ -184,14 +185,19 @@ class SystemDetector:
                 for c_file in spec.get("config_files", []):
                     cp = Path(c_file).expanduser()
                     if cp.is_file():
-                        is_configured = True
-                        config_source = str(cp)
-                        break
-
-            # Ollama is configured if binary is present
-            if spec["name"] == "Ollama" and binary_found:
-                is_configured = True
-                config_source = "localhost:11434"
+                        try:
+                            data = json.loads(cp.read_text())
+                            field_name = "apiKey" if spec["company"] == "Anthropic" else "api_key"
+                            nested = data.get("credentials", {}) if isinstance(data, dict) else {}
+                            value = data.get(field_name) if isinstance(data, dict) else None
+                            if not value and isinstance(nested, dict):
+                                value = nested.get(field_name)
+                            if isinstance(value, str) and value.strip():
+                                is_configured = True
+                                config_source = str(cp)
+                                break
+                        except (OSError, ValueError):
+                            continue
 
             if binary_found or is_configured:
                 # Try getting version
@@ -211,7 +217,7 @@ class SystemDetector:
 
                 sub_status = "API Credentials Found" if is_configured else "Installed"
                 if spec["name"] == "Ollama":
-                    sub_status = "Unlimited"
+                    sub_status = "Installed; server readiness not checked"
 
                 tools.append(
                     DetectedTool(

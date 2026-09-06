@@ -4,10 +4,51 @@ Unit tests for thwip session persistence and cross-agent context portability.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from thwip.config import ThwipConfig, get_config_path
 from thwip.session import Session
+
+
+def test_independent_autosaves_preserve_both_conversations(tmp_path, monkeypatch):
+    monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path))
+    first, second = Session(), Session()
+    first.add_user_message("first conversation")
+    second.add_user_message("second conversation")
+    first_path, second_path = first.save(), second.save()
+    assert first_path != second_path
+    assert Session.load(first.name).messages[0].content == "first conversation"
+    assert Session.load(second.name).messages[0].content == "second conversation"
+    assert first.save() == first_path
+
+
+@pytest.mark.parametrize("field,value", [
+    ("created_at", "bad"), ("updated_at", float("nan")),
+    ("updated_at", float("inf")), ("updated_at", True),
+    ("messages", {}), ("messages", ""),
+])
+def test_corrupt_session_metadata_is_rejected(tmp_path, monkeypatch, field, value):
+    monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path))
+    path = Session(name="damaged").save()
+    data = json.loads(path.read_text())
+    data[field] = value
+    path.write_text(json.dumps(data))
+    assert Session.load("damaged") is None
+
+
+@pytest.mark.parametrize("field,value", [("timestamp", -1), ("timestamp", float("nan")),
+                                         ("agent_name", []), ("company", 1), ("model", None)])
+def test_corrupt_message_metadata_is_rejected(tmp_path, monkeypatch, field, value):
+    monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path))
+    session = Session(name="damaged")
+    session.add_user_message("text")
+    path = session.save()
+    data = json.loads(path.read_text())
+    data["messages"][0][field] = value
+    path.write_text(json.dumps(data))
+    assert Session.load("damaged") is None
 
 
 def test_session_message_flow():

@@ -265,6 +265,33 @@ class ThwipConfig:
 
     def _apply_toml(self, data: dict[str, Any]) -> None:
         """Apply parsed TOML data to config fields."""
+        # Invalid values must not become truthy permission flags or crash startup.
+        specs = {
+            "defaults": {"agent": str, "model": str, "project": str, "theme": str,
+                         "stream": bool, "auto_save": bool, "confirm_tools": bool},
+            "ollama": {"host": str},
+            "fallback": {"enabled": bool, "chain": list},
+            "display": {key: type(value) for key, value in vars(self.display).items()},
+            "limits": {"warn_at_percent": int, "auto_switch": bool},
+        }
+        clean = {}
+        for section, fields in specs.items():
+            raw = data.get(section, {})
+            if not isinstance(raw, dict):
+                continue
+            clean[section] = {key: value for key, value in raw.items()
+                              if key in fields and type(value) is fields[key]}
+        raw_keys = data.get("keys", {})
+        clean["keys"] = {key: value for key, value in raw_keys.items()
+                         if isinstance(value, str) and value.strip()} if isinstance(raw_keys, dict) else {}
+        chain = clean.get("fallback", {}).get("chain", [])
+        if not all(isinstance(item, str) and item.strip() for item in chain):
+            clean["fallback"].pop("chain", None)
+        if not 1 <= clean.get("limits", {}).get("warn_at_percent", 80) <= 100:
+            clean["limits"].pop("warn_at_percent", None)
+        if not 40 <= clean.get("display", {}).get("max_width", 120) <= 500:
+            clean["display"].pop("max_width", None)
+        data = clean
         defaults = data.get("defaults", {})
         if "agent" in defaults:
             self.default_agent = defaults["agent"]

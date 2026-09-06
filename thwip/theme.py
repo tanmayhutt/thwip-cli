@@ -383,15 +383,18 @@ def render_dynamic_status_bar(
     capabilities: list[str],
     tokens_used: int = 0,
     cost: float = 0.0,
+    show_agent: bool = True,
+    show_capabilities: bool = True,
 ) -> Text:
     """Render the bottom status bar based on active agent capabilities."""
     brand = get_brand(company)
     bar = Text()
 
-    bar.append(f" {agent_name}", style=brand.label_style)
-    bar.append(" | ", style="dim")
-    bar.append(f"{model}", style="bold white")
-    bar.append(" | ", style="dim")
+    if show_agent:
+        bar.append(f" {agent_name}", style=brand.label_style)
+        bar.append(" | ", style="dim")
+        bar.append(f"{model}", style="bold white")
+        bar.append(" | ", style="dim")
 
     cap_labels = [
         ("chat", "chat"),
@@ -401,7 +404,7 @@ def render_dynamic_status_bar(
         ("git", "git"),
         ("browser", "web"),
     ]
-    for cap_key, label in cap_labels:
+    for cap_key, label in cap_labels if show_capabilities else []:
         if cap_key in capabilities:
             bar.append(f"[{label}] ", style="success")
         else:
@@ -425,9 +428,12 @@ def render_user_prompt() -> Text:
     return prompt
 
 
-def render_markdown_response(content: str) -> Markdown:
+def render_markdown_response(content: str, markdown: bool = True,
+                             syntax_highlight: bool = True, light: bool = False) -> Markdown | Text:
     """Render agent response as markdown."""
-    return Markdown(content, code_theme="monokai")
+    if not markdown:
+        return Text(content)
+    return Markdown(content, code_theme=("default" if light else "monokai") if syntax_highlight else "bw")
 
 
 def render_code_block(code: str, language: str = "python") -> Syntax:
@@ -436,16 +442,16 @@ def render_code_block(code: str, language: str = "python") -> Syntax:
 
 
 def print_info(message: str) -> None:
-    console.print(f"  [info][info] {message}[/info]")
+    console.print(Text(f"  [info] {message}", style="info"))
 
 
 def print_success(message: str) -> None:
-    console.print(f"  [success][ok] {message}[/success]")
+    console.print(Text(f"  [ok] {message}", style="success"))
 
 
 def print_warning(message: str) -> None:
-    console.print(f"  [warning][warn] {message}[/warning]")
+    console.print(Text(f"  [warn] {message}", style="warning"))
 
 
 def print_error(message: str) -> None:
-    console.print(f"  [error][error] {message}[/error]")
+    console.print(Text(f"  [error] {message}", style="error"))

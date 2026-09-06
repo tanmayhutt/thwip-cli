@@ -93,7 +93,7 @@ def truncate(text: str, max_len: int = 80) -> str:
 
 def mask_key(key: str) -> str:
     """Mask an API key for display: sk-ant-...xyz123"""
-    if not key or len(key) < 10:
+    if not key or len(key) <= 13:
         return "****"
     return f"{key[:7]}...{key[-6:]}"
 

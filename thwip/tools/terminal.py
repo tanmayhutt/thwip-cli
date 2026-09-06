@@ -5,8 +5,34 @@ Terminal execution tools for coding agents.
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import subprocess
 from pathlib import Path
+
+
+def terminate_process_tree(proc) -> None:
+    """Stop only the process group created for this tool invocation."""
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except ProcessLookupError:
+        pass
+
+
+def run_captured(command, *, cwd: str, timeout: float, shell: bool = False):
+    """Capture output and clean up the invocation on timeout or interruption."""
+    proc = subprocess.Popen(command, shell=shell, cwd=cwd, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, start_new_session=os.name == "posix")
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(command, proc.returncode, out, err)
+    except BaseException:
+        terminate_process_tree(proc)
+        proc.communicate()
+        raise
 
 
 class TerminalRunner:
@@ -18,12 +44,10 @@ class TerminalRunner:
     def run_command(self, command: str, timeout: int = 30) -> str:
         """Run a shell command synchronously and return combined stdout/stderr."""
         try:
-            res = subprocess.run(
+            res = run_captured(
                 command,
                 shell=True,
                 cwd=str(self.project_path),
-                capture_output=True,
-                text=True,
                 timeout=timeout,
             )
             out = res.stdout.strip()
@@ -49,6 +73,7 @@ class TerminalRunner:
                 cwd=str(self.project_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=os.name == "posix",
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             out = stdout.decode("utf-8", errors="replace").strip()
@@ -61,9 +86,14 @@ class TerminalRunner:
                 res_str += f"STDERR:\n{err}\n"
             return res_str.strip()
         except TimeoutError:
-            if proc and proc.returncode is None:
-                proc.kill()
+            if proc:
+                terminate_process_tree(proc)
                 await proc.communicate()
             return f"Error: Command timed out after {timeout} seconds."
+        except asyncio.CancelledError:
+            if proc:
+                terminate_process_tree(proc)
+                await proc.communicate()
+            raise
         except Exception as e:
             return f"Error executing command: {e}"

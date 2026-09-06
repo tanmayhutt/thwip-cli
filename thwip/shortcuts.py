@@ -8,6 +8,7 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.key_binding import KeyBindings
 
 SLASH_COMMANDS = [
+    ("/native codex", "Save and leave Thwip for the native Codex CLI"),
     ("/switch", "Switch agent and model mid-conversation"),
     ("/handoff", "Preview context transfer, losses, and model fit locally"),
     ("/agents", "Show all detected coding agents & status"),

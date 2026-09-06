@@ -291,7 +291,10 @@ class GoogleAgent(BaseAgent):
         # Convert messages to Gemini format
         gemini_contents = []
         for msg in messages:
-            if msg.get("tool_calls"):
+            native = msg.get("_native_state", {}).get("google")
+            if native is not None:
+                gemini_contents.append(native)
+            elif msg.get("tool_calls"):
                 parts = []
                 if msg.get("content"):
                     parts.append(types.Part.from_text(text=msg["content"]))
@@ -398,6 +401,7 @@ class GoogleAgent(BaseAgent):
 
                 um = getattr(response, "usage_metadata", None)
                 yield AgentDone(
+                    native_state={"google": response.candidates[0].content} if response.candidates else {},
                     usage=TokenUsage(
                         input_tokens=getattr(um, "prompt_token_count", 0) or 0,
                         output_tokens=getattr(um, "candidates_token_count", 0) or 0,

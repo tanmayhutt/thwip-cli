@@ -364,7 +364,10 @@ class OpenAIAgent(BaseAgent):
                     })
                 response_input: list[dict[str, Any]] = []
                 for message in api_messages:
-                    if message.get("tool_calls"):
+                    native = message.get("_native_state", {}).get("openai")
+                    if native is not None:
+                        response_input.extend(native)
+                    elif message.get("tool_calls"):
                         if message.get("content"):
                             response_input.append({"role": "assistant", "content": message["content"]})
                         for call in message["tool_calls"]:
@@ -386,6 +389,8 @@ class OpenAIAgent(BaseAgent):
 
                 response_kwargs: dict[str, Any] = {
                     "model": model,
+                    "store": False,
+                    "include": ["reasoning.encrypted_content"],
                     "input": response_input,
                     "max_output_tokens": model_info.max_output if model_info else 16_384,
                 }
@@ -412,6 +417,8 @@ class OpenAIAgent(BaseAgent):
                         output_tokens=usage.output_tokens if usage else 0,
                     ),
                     stop_reason="completed",
+                    native_state={"openai": [item.model_dump() if hasattr(item, "model_dump") else vars(item)
+                                               for item in response.output]},
                 )
                 self._last_limit_status = LimitStatus.OK
 

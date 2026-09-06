@@ -18,7 +18,7 @@ class FileEditor:
         self.project_path = Path(project_path).resolve()
 
     def _resolve_path(self, file_path: str) -> Path:
-        if not file_path or "\x00" in file_path:
+        if not isinstance(file_path, str) or not file_path or "\x00" in file_path:
             raise ValueError("A valid project-relative path is required.")
         p = Path(file_path)
         if not p.is_absolute():

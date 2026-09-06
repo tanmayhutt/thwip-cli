@@ -7,6 +7,7 @@ Preserves conversational text across provider switches, not native reasoning sta
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -52,7 +53,7 @@ class Message:
 class Session:
     """A complete conversation session."""
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    name: str = "new-session"
+    name: str = field(default_factory=lambda: f"session-{uuid.uuid4().hex}")
     project_path: str = "."
     current_agent: str = "claude"
     current_model: str = "claude-opus-5"
@@ -186,6 +187,33 @@ class Session:
 
         try:
             data = json.loads(path.read_text())
+            if not isinstance(data, dict):
+                return None
+            counter = data.get("observed_tool_results", 0)
+            coverage = data.get("tool_tracking_complete", False)
+            if type(counter) is not int or counter < 0 or type(coverage) is not bool:
+                return None
+            for key in ("id", "name", "project_path", "current_agent", "current_model", "system_prompt"):
+                if key in data and not isinstance(data[key], str):
+                    return None
+            def valid_timestamp(value: Any) -> bool:
+                return type(value) in (int, float) and value >= 0 and math.isfinite(value)
+
+            if any(not valid_timestamp(data[key]) for key in ("created_at", "updated_at") if key in data):
+                return None
+            if not isinstance(data.get("messages", []), list):
+                return None
+            for raw in data.get("messages", []):
+                if not isinstance(raw, dict) or raw.get("role") not in {"user", "assistant", "system", "tool"}:
+                    return None
+                if not isinstance(raw.get("content"), str) or not isinstance(raw.get("tool_calls", []), list):
+                    return None
+                if type(raw.get("tokens", 0)) is not int or raw.get("tokens", 0) < 0:
+                    return None
+                if not valid_timestamp(raw.get("timestamp", 0)):
+                    return None
+                if any(not isinstance(raw.get(key, ""), str) for key in ("agent_name", "model", "company")):
+                    return None
             session = cls(
                 id=data.get("id", ""),
                 name=data.get("name", "saved-session"),

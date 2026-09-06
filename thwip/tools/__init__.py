@@ -34,6 +34,7 @@ class ToolManager:
                         "type": "object",
                         "properties": {
                             "file_path": {"type": "string", "description": "Relative path to file"},
+                            "max_lines": {"type": "integer", "minimum": 1, "maximum": 10000},
                         },
                         "required": ["file_path"],
                     },
@@ -140,6 +141,7 @@ class ToolManager:
                     "type": "object",
                     "properties": {
                         "file_path": {"type": "string", "description": "Relative path to file"},
+                        "max_lines": {"type": "integer", "minimum": 1, "maximum": 10000},
                     },
                     "required": ["file_path"],
                 },
@@ -216,8 +218,27 @@ class ToolManager:
 
     def execute_tool(self, tool_name: str, args: dict[str, Any]) -> str:
         """Execute a tool by name with arguments and return output."""
+        schemas = {tool["function"]["name"]: tool["function"]["parameters"]
+                   for tool in self.get_openai_tools()}
+        if not isinstance(tool_name, str) or tool_name not in schemas:
+            return "Error: Unknown tool."
+        if not isinstance(args, dict):
+            return "Error: Tool arguments must be an object."
+        schema = schemas[tool_name]
+        for key in schema.get("required", []):
+            if key not in args:
+                return f"Error: Missing required argument '{key}'."
+        for key, value in args.items():
+            prop = schema["properties"].get(key)
+            if prop is None:
+                return f"Error: Unknown argument '{key}'."
+            expected = {"string": str, "boolean": bool, "integer": int}[prop["type"]]
+            if type(value) is not expected:
+                return f"Error: Argument '{key}' must be {prop['type']}."
+            if expected is int and not prop.get("minimum", 1) <= value <= prop.get("maximum", 10000):
+                return f"Error: Argument '{key}' is outside the supported range."
         if tool_name == "read_file":
-            result = self.file_editor.read_file(args.get("file_path", ""))
+            result = self.file_editor.read_file(args.get("file_path", ""), args.get("max_lines", 500))
         elif tool_name == "write_file":
             result = self.file_editor.write_file(args.get("file_path", ""), args.get("content", ""))
         elif tool_name == "edit_file":

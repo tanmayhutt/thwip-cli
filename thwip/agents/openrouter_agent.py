@@ -25,6 +25,7 @@ from thwip.agents.base import (
     TokenUsage,
     ToolUseStart,
 )
+from thwip.agents.chat_messages import serialize_chat_messages
 
 
 class OpenRouterAgent(BaseAgent):
@@ -162,7 +163,7 @@ class OpenRouterAgent(BaseAgent):
         api_messages: list[dict[str, Any]] = []
         if system_prompt:
             api_messages.append({"role": "system", "content": system_prompt})
-        api_messages.extend(messages)
+        api_messages.extend(serialize_chat_messages(messages))
 
         kwargs: dict[str, Any] = {
             "model": model,

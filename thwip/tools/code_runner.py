@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from thwip.tools.terminal import run_captured
+
 
 class CodeRunner:
     """Executes arbitrary code snippets in isolated temporary files."""
@@ -21,11 +23,9 @@ class CodeRunner:
             f.write(code)
             temp_file = f.name
         try:
-            res = subprocess.run(
+            res = run_captured(
                 ["python3", temp_file],
                 cwd=str(self.project_path),
-                capture_output=True,
-                text=True,
                 timeout=timeout,
             )
             out = res.stdout.strip()
@@ -44,11 +44,9 @@ class CodeRunner:
             f.write(code)
             temp_file = f.name
         try:
-            res = subprocess.run(
+            res = run_captured(
                 ["node", temp_file],
                 cwd=str(self.project_path),
-                capture_output=True,
-                text=True,
                 timeout=timeout,
             )
             out = res.stdout.strip()

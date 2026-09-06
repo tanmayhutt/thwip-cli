@@ -143,6 +143,7 @@ class AgentDone:
     """Agent finished responding."""
     usage: TokenUsage = field(default_factory=TokenUsage)
     stop_reason: str = "end_turn"
+    native_state: dict[str, Any] = field(default_factory=dict)
 
 
 # Union of all possible events

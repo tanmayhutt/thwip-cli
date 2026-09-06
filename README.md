@@ -54,6 +54,7 @@ thwip
 |:---|:---|
 | `/switch [agent] [model]` | Switch active agent or model mid-conversation |
 | `/handoff [agent] [model]` | Preview a target locally without switching or sending data |
+| `/native codex` | Save and leave Thwip for the installed Codex CLI using its own authentication |
 | `/agents` | Show all detected coding agents, company status, and capabilities |
 | `/models [agent]` | List available models for current or target agent |
 | `/key [provider]` | Enter an API key securely without placing it in prompt history |
@@ -68,11 +69,25 @@ thwip
 | `/cost` | Show estimated session and cumulative cost |
 | `/project [path]` | View or change project working directory |
 | `Ctrl + S` | Quick switch agent prompt |
-
-Short aliases are available for frequent commands: `/a`, `/m`, `/s`, `/k`, `/g`, and `/t`.
 | `Ctrl + T` | Show agent status |
 | `Ctrl + H` | View history |
 | `/quit` | Exit thwip |
+
+Short aliases are available for frequent commands: `/a`, `/m`, `/s`, `/k`, `/g`, and `/t`.
+
+### Existing Codex login
+
+Use `/native codex` to open the installed native CLI without configuring a Thwip API
+key. After confirmation, Thwip saves its session and replaces itself with Codex in
+the selected project, using a read-only sandbox and on-request approvals. Codex
+owns authentication, model selection, permissions, and usage limits. An expired
+or missing login must be resolved in Codex itself.
+
+This is a launcher, not an in-REPL provider adapter. Conversation history is not
+transferred, native activity is not included in Thwip usage totals, and exiting
+Codex does not automatically restart Thwip. Restart `thwip` and use `/session load`
+to resume the saved Thwip conversation. Claude and Gemini native launchers are not
+implemented. Direct API mode remains unchanged.
 
 ---
 
@@ -117,7 +132,7 @@ See [research and prior art](docs/handoff-research.md) for the differentiation r
 | Google | Gemini API (3.1 Pro Preview, 3.7 Flash, 3.5 Flash-Lite) | Chat, File Edit, Code Run, Terminal, Git |
 | OpenAI | OpenAI API (GPT-5.6 Sol, Terra, Luna) | Chat, File Edit, Code Run, Terminal, Git |
 | DeepSeek | DeepSeek V3 / R1 Reasoner | Chat, File Edit, Code Run, Reasoning |
-| Groq | Llama 3.3 70B, Mixtral | Chat, File Edit, Code Run |
+| Groq | GPT-OSS 120B (default); Llama 3.3 for eligible enterprise accounts only | Chat, File Edit, Code Run |
 | Ollama | Local Models (Llama 3.3, Qwen Coder, DeepSeek R1) | Chat, File Edit, Code Run (Local, Offline) |
 | OpenRouter | Multi-Company Models | Gateway Routing |
 

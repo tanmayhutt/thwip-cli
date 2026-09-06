@@ -5,7 +5,11 @@ Usage tracking & limit management for thwip.
 from __future__ import annotations
 
 import json
+import math
+import os
+import tempfile
 import time
+import warnings
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -67,17 +71,42 @@ class UsageTracker:
         path = get_usage_path()
         data = {k: asdict(v) for k, v in self.stats.items()}
         try:
-            path.write_text(json.dumps(data, indent=2))
-        except Exception:
-            pass
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                             prefix=".usage-", delete=False) as temporary:
+                temporary_path = temporary.name
+                os.chmod(temporary_path, 0o600)
+                json.dump(data, temporary, indent=2)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_path, path)
+        except (OSError, ValueError, TypeError):
+            warnings.warn("Could not persist usage statistics.", RuntimeWarning, stacklevel=2)
+        finally:
+            if "temporary_path" in locals() and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
 
     def load(self) -> None:
         path = get_usage_path()
         if not path.is_file():
             return
         try:
+            path.chmod(0o600)
             data = json.loads(path.read_text())
             for k, v in data.items():
-                self.stats[k] = AgentUsageStats(**v)
+                try:
+                    stats = AgentUsageStats(**v)
+                    for field_name in ("input_tokens", "output_tokens", "request_count"):
+                        value = getattr(stats, field_name)
+                        if type(value) is not int or value < 0:
+                            raise ValueError("Invalid usage counter")
+                    for field_name in ("estimated_cost", "last_limit_hit_timestamp"):
+                        value = getattr(stats, field_name)
+                        if type(value) not in (int, float) or value < 0 or not math.isfinite(value):
+                            raise ValueError("Invalid usage value")
+                    if not isinstance(stats.last_error, str):
+                        raise TypeError("Invalid error description")
+                    self.stats[k] = stats
+                except (TypeError, ValueError, OverflowError):
+                    continue
         except Exception:
             pass
