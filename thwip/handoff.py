@@ -41,7 +41,9 @@ class HandoffReport:
 
 
 def local_model(agent: BaseAgent, model_id: str) -> ModelInfo | None:
-    return next((model for model in agent.get_handoff_models() if model.id == model_id), None)
+    """Resolve a model from the local catalog, or from the adapter when it accepts explicit IDs."""
+    known = next((model for model in agent.get_handoff_models() if model.id == model_id), None)
+    return known or agent.get_model_info(model_id)
 
 
 def local_capabilities(agent: BaseAgent, model_id: str) -> set[Capability]:

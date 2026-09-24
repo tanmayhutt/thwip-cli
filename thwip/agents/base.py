@@ -146,8 +146,21 @@ class AgentDone:
     native_state: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class NativePermission:
+    """A native agent awaits a one-operation permission decision."""
+    description: str
+    approved: bool = False
+
+
+@dataclass
+class NativeActivity:
+    """Native tool activity that makes automatic replay unsafe."""
+    description: str
+
+
 # Union of all possible events
-AgentEvent = TextDelta | ThinkingDelta | ToolUseStart | ToolResult | TokenUsage | LimitHit | AgentDone
+AgentEvent = TextDelta | ThinkingDelta | ToolUseStart | ToolResult | TokenUsage | LimitHit | AgentDone | NativePermission | NativeActivity
 
 
 # ---------------------------------------------------------------------------

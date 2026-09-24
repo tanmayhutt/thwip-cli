@@ -20,6 +20,9 @@ def cli(tmp_path, monkeypatch):
     cli = ThwipCLI.__new__(ThwipCLI)
     cli.config = ThwipConfig(project=str(tmp_path), auto_save=False)
     cli.registry = AgentRegistry(cli.config)
+    async def no_native_discovery(project):
+        return None
+    monkeypatch.setattr(cli.registry, 'connect_native_agents', no_native_discovery)
     for a in cli.registry.list_agents():
         monkeypatch.setattr(a, 'is_installed', lambda: True)
         monkeypatch.setattr(a, 'is_configured', lambda: False)
@@ -162,3 +165,41 @@ async def test_failover_does_not_retry_already_failed_provider(cli, monkeypatch)
     cli.config.limits.auto_switch = True
     await cli.process_user_message('hello')
     assert len(attempts) <= len(agents), f'Repeated failed providers: {attempts}'
+
+
+def test_main_handles_version_and_help_without_starting_the_repl(capsys):
+    from thwip import __version__
+    from thwip import cli as cli_module
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli_module.main(['--version'])
+    assert exit_info.value.code == 0 and f'thwip {__version__}' in capsys.readouterr().out
+    with pytest.raises(SystemExit) as exit_info:
+        cli_module.main(['--help'])
+    assert exit_info.value.code == 0 and '--project' in capsys.readouterr().out
+    with pytest.raises(SystemExit) as exit_info:
+        cli_module.main(['--project', '/definitely/missing/dir'])
+    assert exit_info.value.code == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_removes_unanswered_user_message(cli, monkeypatch):
+    class Broken:
+        name = 'openai'
+        display_name = 'Broken'
+        company = 'OpenAI'
+        native_tools = True
+        project = '.'
+        def is_configured(self):
+            return True
+        def is_installed(self):
+            return True
+        def get_capabilities_for_model(self, model):
+            return set()
+        async def chat(self, **kwargs):
+            raise RuntimeError('Native CLI rejected thread/start')
+            yield
+    cli.current_agent = Broken()
+    cli.session.current_agent = 'openai'
+    await cli.process_user_message('hello')
+    assert cli.session.messages == []

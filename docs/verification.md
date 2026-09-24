@@ -1,8 +1,37 @@
 # Verification status
 
-Verified locally on 2026-09-07 for v1.3.0. The Python suite passes 186 tests.
-Exhaustive behavior across every provider and
+Verified locally on 2026-09-24 for the unreleased v1.4.0 source. The Python suite
+passes 216 offline tests. Exhaustive behavior across every provider and
 configuration has not been established.
+
+## Native CLI connections (2026-09-24)
+
+Live checks were run on macOS through a pseudo-terminal driving the real REPL with
+the installed Codex CLI 0.152.1, Claude Code 2.1.281, and Antigravity CLI 1.2.8,
+each using its existing sign-in. No API keys were configured.
+
+| Flow | Result |
+| --- | --- |
+| Startup discovery | All three CLIs connected; live model lists shown (Codex 4 models, Antigravity 14, Claude aliases) |
+| Chat turn per provider | Claude Code, Codex, and Antigravity each answered; text streamed into the Live view |
+| Context across `/switch` | Codex and Antigravity both recalled the answer given by the previous provider |
+| Codex approval request | A write command outside the read-only sandbox produced a permission prompt; denial left the workspace unchanged |
+| Ctrl+C during a response | Turn cancelled, child process terminated, REPL continued, unanswered message removed |
+| `/session save` and `/session load` | Session with a native provider saved and reloaded in a fresh run |
+| `/models`, `/models <provider>`, `/models <tier>` | Live catalogs listed with `CLI account` in place of API pricing |
+| `thwip --version`, `--help`, `--project` | Handled without starting the REPL; invalid project exits with code 2 |
+| `/limits` and `/status` usage windows | Codex and Claude Code account windows (5h, 7d) displayed with reset times after live turns |
+| Leftover processes | None after each run |
+
+The defect that blocked the previous attempt was the Codex sandbox value: the
+adapter sent `readOnly` and Codex rejected `thread/start` with an invalid-request
+error. The protocol enum is `read-only`. A regression test now checks the request.
+
+Remaining limitations: the Antigravity CLI showed intermittent network resets to
+Google's backend during testing, which surface as turn errors; Claude Code's model
+aliases are a curated list because the CLI exposes no model listing; native usage
+limit failover is unit-tested from error text, not observed live; the real Gemini
+CLI ACP path is covered by mocked tests only because it is not installed here.
 
 | Area | Evidence | Remaining limitation |
 | --- | --- | --- |
@@ -10,7 +39,8 @@ configuration has not been established.
 | Sessions | Save/load, separate fresh conversations, malformed metadata, permissions, project rebinding | Concurrent writes to the same explicitly named session are not coordinated |
 | Provider switching and handoff | All seven provider catalogs, portable history, bounded failover | Live account quotas and model availability unverified |
 | Tool execution | Real temporary-file operations, path containment, process timeout/cancellation, invalid arguments | Shell and code tools retain local user privileges; output capture memory is unbounded |
-| Native Codex launcher | Save-before-launch, consent, flags, missing binary, terminal checks, failures | Mocked process replacement; live native interaction unverified; no conversation transfer |
+| Native Codex launcher | Save-before-launch, consent, flags, missing binary, terminal checks, failures | Mocked process replacement; no conversation transfer |
+| Native CLI connections | Live REPL runs above; mocked protocol tests for approvals, failures, limits, prompt building, discovery parsing | Gemini ACP path mocked only; live limit failover not observed |
 | Provider responses | Mocked native tool continuations; DeepSeek/Groq/OpenRouter streaming, usage-only chunks, 429/500 errors and serialized tool arguments | Other streaming and error branches still have coverage gaps |
 | Display/config/auth | Configuration validation, display settings, credential boundaries, short-key masking | No full terminal/platform matrix |
 | Usage | Atomic writes, malformed records, valid totals | Unknown catalog pricing may appear as zero estimated cost |

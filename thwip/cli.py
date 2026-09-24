@@ -16,6 +16,7 @@ import getpass
 import os
 import re
 import shutil
+import signal
 import sys
 from pathlib import Path
 
@@ -34,10 +35,13 @@ from thwip.agents.base import (
     BaseAgent,
     Capability,
     LimitHit,
+    NativeActivity,
+    NativePermission,
     TextDelta,
     ThinkingDelta,
     ToolUseStart,
 )
+from thwip.agents.native_common import describe_limit_windows
 from thwip.config import DisplayConfig, ThwipConfig, get_config_dir
 from thwip.detector import SystemDetector
 from thwip.handoff import build_handoff_report, local_capabilities, local_model
@@ -75,8 +79,10 @@ class SafeFileHistory(FileHistory):
 class ThwipCLI:
     """The interactive terminal CLI REPL."""
 
-    def __init__(self) -> None:
+    def __init__(self, project: str | None = None) -> None:
         self.config = ThwipConfig.load()
+        if project:
+            self.config.project = project
         self.registry = AgentRegistry(self.config)
         self.detector = SystemDetector()
         self.usage_tracker = UsageTracker()
@@ -136,6 +142,11 @@ class ThwipCLI:
 
     async def run_async(self) -> None:
         """Main async REPL loop."""
+        print_info("Connecting installed agents using their existing sign-ins...")
+        await self.registry.connect_native_agents(str(Path(self.session.project_path).resolve()))
+        self.current_agent = self._resolve_initial_agent()
+        if getattr(self.current_agent, "native_tools", False):
+            self.session.current_model = self.current_agent.get_default_model()
         # 1. Detect agents on system
         self.detector.scan_all()
         all_agents = self.registry.list_agents()
@@ -194,14 +205,44 @@ class ThwipCLI:
                         break
                     continue
 
-                # Process chat message with agent
-                await self.process_user_message(user_input)
+                # Process chat message with agent; Ctrl+C interrupts the turn, not the REPL.
+                await self._run_interruptible(self.process_user_message(user_input))
 
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[dim]Exiting thwip. Goodbye![/dim]")
                 break
             except Exception as e:
                 print_error(f"Unexpected error: {e}")
+
+    async def _run_interruptible(self, coroutine) -> None:
+        """Run one turn so that SIGINT cancels the turn and its child processes only."""
+        loop = asyncio.get_running_loop()
+        task = asyncio.ensure_future(coroutine)
+        interrupted = False
+
+        def on_interrupt() -> None:
+            nonlocal interrupted
+            interrupted = True
+            task.cancel()
+
+        previous = signal.getsignal(signal.SIGINT)
+        try:
+            loop.add_signal_handler(signal.SIGINT, on_interrupt)
+        except (NotImplementedError, RuntimeError, ValueError):
+            await task
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            if not interrupted:
+                raise
+            if self.session.messages and self.session.messages[-1].role == "user":
+                self.session.messages.pop()
+            console.print()
+            print_warning("Response interrupted. The unanswered message was removed; send it again or /switch.")
+        finally:
+            loop.remove_signal_handler(signal.SIGINT)
+            signal.signal(signal.SIGINT, previous)
 
     async def handle_command(self, cmd_line: str) -> str | None:
         """Handle slash commands."""
@@ -221,7 +262,7 @@ class ThwipCLI:
         elif cmd in ("/help", "/h"):
             self.show_help()
 
-        elif cmd in ("/switch", "/s"):
+        elif cmd in ("/switch", "/s", "/sw"):
             await self.cmd_switch(arg1, arg2)
 
         elif cmd == "/handoff":
@@ -234,9 +275,15 @@ class ThwipCLI:
             self.cmd_show_agents()
 
         elif cmd in ("/key", "/auth", "/config", "/k"):
-            self.cmd_auth_config(arg1, arg2)
+            await self.cmd_auth_config(arg1, arg2)
 
         elif cmd in ("/models", "/m"):
+            target = self.registry.get_agent(arg1) if arg1 else self.current_agent
+            if target and getattr(target, "native_tools", False):
+                target.project = str(Path(self.session.project_path).resolve())
+                await target.refresh_models()
+                if target.discovery_error:
+                    print_warning(target.discovery_error)
             self.cmd_show_models(arg1, arg2)
 
         elif cmd in ("/tools", "/t"):
@@ -249,6 +296,8 @@ class ThwipCLI:
             self.cmd_show_limits()
 
         elif cmd == "/detect":
+            await self.registry.connect_native_agents(str(Path(self.session.project_path).resolve()))
+            self.current_agent = self.registry.get_agent(self.session.current_agent) or self.current_agent
             self.cmd_detect()
 
         elif cmd == "/history":
@@ -320,6 +369,9 @@ class ThwipCLI:
         )
 
     def cmd_show_tools(self) -> None:
+        if getattr(self.current_agent, "native_tools", False):
+            print_info("Tools are provided by the connected CLI. Its tool activity and permission requests appear during responses.")
+            return
         """Display available universal tools."""
         table = Table(title="Universal Tool Engine", box=box.ROUNDED)
         table.add_column("Tool Name", style="bold white")
@@ -506,11 +558,21 @@ class ThwipCLI:
             print_error(f"{new_agent.display_name} is not installed on this machine.")
             return
 
+        if getattr(new_agent, "native_tools", False) and not new_agent.is_configured():
+            new_agent.project = str(Path(self.session.project_path).resolve())
+            await new_agent.refresh_models()
+            if not new_agent.is_configured():
+                print_error(new_agent.discovery_error)
+                return
+
         chosen_model = model_id or new_agent.get_default_model()
         if not new_agent.get_model_info(chosen_model):
             valid_models = ", ".join(model.id for model in new_agent.available_models)
             print_error(f"Unknown model '{chosen_model}' for {new_agent.display_name}. Available: {valid_models}")
             return
+        if chosen_model not in {model.id for model in new_agent.available_models}:
+            print_warning(f"'{chosen_model}' is not in the catalog reported by {new_agent.display_name}. "
+                          "The CLI validates it on your next message; use /models to see the reported list.")
 
         old_agent = self.current_agent
         old_caps = old_agent.get_capabilities_for_model(self.session.current_model)
@@ -548,6 +610,11 @@ class ThwipCLI:
                 f"Notice: {new_agent.display_name} was selected, but no API key was found.\n"
                 f"  Set your key with: export {key_name}=your_key_here\n"
                 f"  Or add it to ~/.thwip/config.toml"
+            )
+        elif getattr(new_agent, "native_tools", False):
+            print_success(
+                f"Now chatting with {new_agent.display_name} ({chosen_model}) through its existing sign-in. "
+                "Portable text history preserved."
             )
         else:
             print_success(
@@ -626,7 +693,8 @@ class ThwipCLI:
                     continue
 
                 ctx = f"{m.context_window:,}" if m.context_window else "-"
-                price = f"${m.pricing_input} / ${m.pricing_output}" if m.pricing_input else "Free"
+                price = ("CLI account" if getattr(ag, "native_tools", False) else
+                         f"${m.pricing_input} / ${m.pricing_output}" if m.pricing_input else "Free")
                 tier_badge = tier_styles.get(m_tier, m_tier.title())
                 def_mark = " [dim](default)[/dim]" if m.is_default else ""
 
@@ -646,7 +714,17 @@ class ThwipCLI:
         console.print(table)
         console.print("[dim]Filter by tier: [bold]/models flagship[/bold], [bold]/models balanced[/bold], [bold]/models fast[/bold][/dim]\n")
 
-    def cmd_auth_config(self, provider: str = "", key: str = "") -> None:
+    async def _rebuild_registry(self) -> None:
+        """Reload adapters after a credential change and keep native connections for the rest."""
+        self.registry = AgentRegistry(self.config)
+        await self.registry.connect_native_agents(str(Path(self.session.project_path).resolve()))
+        agent = self.registry.get_agent(self.session.current_agent)
+        if agent:
+            self.current_agent = agent
+            if not agent.get_model_info(self.session.current_model):
+                self.session.current_model = agent.get_default_model()
+
+    async def cmd_auth_config(self, provider: str = "", key: str = "") -> None:
         """View or set API credentials stored in ~/.thwip/config.toml."""
         provider_map = {
             "1": "google",
@@ -690,10 +768,7 @@ class ThwipCLI:
             self.config.keys[target_prov] = secret
             self.config.key_sources[target_prov] = "config.toml"
             self.config.save()
-            self.registry = AgentRegistry(self.config)
-            agent = self.registry.get_agent(self.session.current_agent)
-            if agent:
-                self.current_agent = agent
+            await self._rebuild_registry()
             print_success(f"API key for '{target_prov}' saved to ~/.thwip/config.toml")
             return
 
@@ -738,10 +813,7 @@ class ThwipCLI:
             self.config.keys[target_prov] = secret
             self.config.key_sources[target_prov] = "config.toml"
             self.config.save()
-            self.registry = AgentRegistry(self.config)
-            agent = self.registry.get_agent(self.session.current_agent)
-            if agent:
-                self.current_agent = agent
+            await self._rebuild_registry()
             print_success(f"API key for '{target_prov}' saved to ~/.thwip/config.toml")
         except (KeyboardInterrupt, EOFError):
             print_warning("\nCancelled.")
@@ -755,6 +827,9 @@ class ThwipCLI:
         content.append(f"Project:     {os.path.abspath(self.session.project_path)}\n", style="white")
         content.append(f"Session:     {self.session.name} ({len(self.session.messages)} messages)\n", style="white")
         content.append(f"Tokens:      {self.session.get_total_tokens():,} used\n", style="dim")
+        if getattr(self.current_agent, "native_tools", False):
+            content.append("Connection:  Existing CLI sign-in; billing and tool accounting managed by native CLI\n", style="dim")
+            content.append(f"Usage:       {describe_limit_windows(getattr(self.current_agent, 'limit_windows', []))}\n", style="dim")
         content.append(f"Config Key:  {self.config.key_sources.get(self.current_agent.name, 'None')}\n", style="dim")
 
         console.print(Panel(content, title="Current Status", box=box.ROUNDED))
@@ -779,6 +854,16 @@ class ThwipCLI:
                 stats.get("last_error") or "None",
             )
         console.print(table)
+        native = [agent for agent in self.registry.list_agents()
+                  if getattr(agent, "native_tools", False) and agent.is_configured()]
+        if native:
+            windows = Table(title="CLI Account Usage (reported by each CLI)", box=box.ROUNDED)
+            windows.add_column("Agent", style="bold white")
+            windows.add_column("Usage windows", style="white")
+            for agent in native:
+                windows.add_row(agent.display_name, describe_limit_windows(getattr(agent, "limit_windows", [])))
+            console.print(windows)
+            console.print("[dim]Windows update after each native response. Antigravity does not report usage windows.[/dim]")
 
     def cmd_detect(self) -> None:
         """Re-scan system tools."""
@@ -819,6 +904,8 @@ class ThwipCLI:
                 console.print(self._render_response(m.content))
 
     def cmd_show_cost(self) -> None:
+        if getattr(self.current_agent, "native_tools", False):
+            print_info("Native CLI billing is not included in the API estimates below. Check the CLI account for usage limits.")
         summary = self.usage_tracker.get_summary()
         console.print(f"  [bold]Total Cumulative Spend:[/bold] [green]${summary['total_cost']:.4f}[/green]")
         console.print(f"  [bold]Total Requests:[/bold] {summary['total_requests']}")
@@ -855,6 +942,15 @@ class ThwipCLI:
 
     async def process_user_message(self, text: str, _attempted: set[str] | None = None) -> None:
         """Send message to active agent, handle streaming, tool calls, and limits."""
+        native = getattr(self.current_agent, "native_tools", False)
+        if native:
+            self.session.tool_tracking_complete = False
+            self.current_agent.project = str(Path(self.session.project_path).resolve())
+            if not self.current_agent.is_configured():
+                await self.current_agent.refresh_models()
+                if not self.current_agent.is_configured():
+                    print_error(self.current_agent.discovery_error)
+                    return
         if not self.current_agent.is_configured():
             key_name = {
                 "google": "GEMINI_API_KEY",
@@ -888,6 +984,9 @@ class ThwipCLI:
                 )
                 if self.current_agent.name == "openai":
                     guidance.append("\n  - Or use the installed Codex CLI with its own login: /native codex")
+                installed = getattr(self.current_agent, "is_installed", None)
+                if callable(installed) and installed():
+                    guidance.append("\n  - Or reconnect the installed CLI sign-in: /detect")
             console.print(
                 Panel(
                     guidance,
@@ -915,7 +1014,7 @@ class ThwipCLI:
         # Get tools if agent supports them
         tools = None
         effective_capabilities = self.current_agent.get_capabilities_for_model(self.session.current_model)
-        if Capability.FILE_EDIT in effective_capabilities:
+        if Capability.FILE_EDIT in effective_capabilities and not native:
             if self.current_agent.name == "claude":
                 tools = self.tool_manager.get_anthropic_tools()
             else:
@@ -966,13 +1065,22 @@ class ThwipCLI:
                             )
                         elif isinstance(event, ToolUseStart):
                             tool_requests.append(event)
+                        elif isinstance(event, NativePermission):
+                            live.stop()
+                            console.print(Panel(Text(event.description), title="Native tool permission"))
+                            event.approved = input("Allow this operation once? [y/N]: ").strip().lower() in {"y", "yes"}
+                            live.start()
+                        elif isinstance(event, NativeActivity):
+                            live.stop()
+                            print_info(event.description)
+                            live.start()
                         elif isinstance(event, AgentDone):
                             native_state = event.native_state
                             used = event.usage.input_tokens + event.usage.output_tokens
                             total_tokens += used
                             self.usage_tracker.record_usage(
                                 agent_name=self.current_agent.name,
-                                model=self.session.current_model,
+                                model="" if native else self.session.current_model,
                                 input_tokens=event.usage.input_tokens,
                                 output_tokens=event.usage.output_tokens,
                             )
@@ -989,6 +1097,10 @@ class ThwipCLI:
                 except Exception as exc:
                     live.stop()
                     print_error(f"Agent error: {exc}")
+                    if not collected_text and self.session.messages and self.session.messages[-1].role == "user":
+                        self.session.messages.pop()
+                        print_info("Your message was not answered and was removed from the conversation. "
+                                   "Send it again or /switch to another agent.")
                     return
 
             collected_text += round_text
@@ -1116,9 +1228,27 @@ class ThwipCLI:
                     break
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Entry point for the thwip CLI command."""
-    cli = ThwipCLI()
+    import argparse
+
+    from thwip import __version__
+
+    parser = argparse.ArgumentParser(
+        prog="thwip",
+        description="Universal coding agent multiplexer. Run without arguments to open the interactive REPL.",
+    )
+    parser.add_argument("--version", action="version", version=f"thwip {__version__}")
+    parser.add_argument("-p", "--project", metavar="PATH",
+                        help="Project directory for this session (defaults to the saved project or the current directory).")
+    args = parser.parse_args(argv)
+    project = None
+    if args.project:
+        candidate = Path(args.project).expanduser()
+        if not candidate.is_dir():
+            parser.error(f"project directory '{args.project}' does not exist")
+        project = str(candidate.resolve())
+    cli = ThwipCLI(project)
     cli.run()
 
 
