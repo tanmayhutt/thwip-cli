@@ -17,7 +17,8 @@
 - **Rate Limit Failover**: Detects HTTP 429 errors or quota exhaustion and prompts instant switching to ready fallback models.
 - **Tool Layer**: Shared file editing, code execution (Python, Node, Shell), and Git integration across connected models.
 - **Session Persistence**: Save and resume sessions across projects with `/session save` and `/session load`.
-- **Terminal Ergonomics**: Autocompletion (Tab), keyboard shortcuts (Ctrl+S, Ctrl+T, Ctrl+H), and streaming markdown rendering.
+- **Familiar Flow**: The same everyday commands as Codex, Claude Code, and Antigravity (`/model`, `/new`, `/resume`, `/compact`, `/diff`, `/copy`, `!cmd`, `@file`), plus autocompletion, Ctrl+S / Ctrl+T shortcuts, and streaming Markdown.
+- **Live Model Lists**: Model catalogs come from the connected CLI or the provider's list-models endpoint, never from a hardcoded list.
 
 ---
 
@@ -62,8 +63,17 @@ thwip --version
 | `/models [agent]` | List available models for current or target agent |
 | `/key [provider]` | Enter an API key securely without placing it in prompt history |
 | `/status` | Display current session, project, and token stats |
-| `/limits` | View token usage, quota, and spend metrics |
+| `/limits`, `/usage` | View token usage, CLI account usage windows, and spend metrics |
 | `/detect` | Re-scan installed agents and reconnect CLI sign-ins |
+| `/model [id]` | Pick a model for the current agent from a numbered list or by ID |
+| `/new` | Start a fresh conversation; the current one is saved first |
+| `/resume [name]` | Resume a saved session from a numbered list |
+| `/compact` | Summarize the conversation with the current model to free context; the summary is plain text and travels across providers |
+| `/diff [staged]` | Show the project's git diff |
+| `/copy` | Copy the last response to the clipboard |
+| `/export [path]` | Write the conversation to Markdown with per-message model attribution |
+| `!<command>` | Run a shell command in the project without involving a model |
+| `@path` in a message | Attach a project file's content to the message (files outside the project are ignored) |
 | `/session save [name]` | Save current chat session |
 | `/session load <name>` | Load a previously saved session |
 | `/session list` | List all saved sessions |
@@ -116,6 +126,28 @@ providers.
 replaces Thwip with the Codex CLI itself in the selected project. Conversation
 history is not transferred by the launcher; use `/session load` after restarting
 Thwip to resume.
+
+## Live model lists
+
+Model lists are not hardcoded. Each connected source supplies its own list:
+
+- Installed CLIs report their models (Codex `model/list`, `agy models`, Claude Code aliases).
+- Direct providers with a key are queried through their list-models endpoint (OpenAI,
+  Anthropic, Google, DeepSeek, Groq, OpenRouter) at startup, on `/models`, and right
+  after `/key`. Non-chat models (embeddings, speech, image, moderation) are filtered
+  out. Context sizes and prices are taken from the provider when it publishes them.
+- A small bundled list per provider remains only as an offline fallback and is labelled
+  "bundled fallback" in `/models` until a key or connection is available.
+
+## Usage-limit failover
+
+When the active provider reports an exhausted limit (Codex "You've hit your usage
+limit", Claude Code "usage limit reached" or a rejected rate-limit event, Google
+`RESOURCE_EXHAUSTED`, or HTTP 429 from a direct API), Thwip stops, shows the ready
+alternatives with their default models, and offers to switch. Accepting switches the
+provider, keeps the text conversation, and re-sends the unanswered message. Set
+`[limits] auto_switch = true` to skip the question. The `[fallback] chain` order is
+honored; a chain model the provider does not list falls back to that provider's default.
 
 ## Auditable handoffs
 

@@ -12,12 +12,14 @@ Universal coding agent multiplexer:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import getpass
 import os
 import re
 import shutil
 import signal
 import sys
+import time
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -65,6 +67,10 @@ from thwip.theme import (
     render_startup_banner,
 )
 from thwip.tools import ToolManager
+
+
+class TurnInterrupted(Exception):
+    """Raised when the user presses Ctrl+C at a prompt shown during a turn."""
 
 
 class SafeFileHistory(FileHistory):
@@ -198,15 +204,20 @@ class ThwipCLI:
                 if not user_input:
                     continue
 
+                # Shell escape, as in Claude Code: run a command in the project without involving a model.
+                if user_input.startswith("!"):
+                    await self._run_interruptible(self.cmd_shell(user_input[1:].strip()))
+                    continue
+
                 # Handle slash commands
                 if user_input.startswith("/"):
-                    handled = await self.handle_command(user_input)
+                    handled = await self._run_interruptible(self.handle_command(user_input))
                     if handled == "QUIT":
                         break
                     continue
 
                 # Process chat message with agent; Ctrl+C interrupts the turn, not the REPL.
-                await self._run_interruptible(self.process_user_message(user_input))
+                await self._run_interruptible(self.process_user_message(self._expand_mentions(user_input)))
 
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[dim]Exiting thwip. Goodbye![/dim]")
@@ -214,8 +225,30 @@ class ThwipCLI:
             except Exception as e:
                 print_error(f"Unexpected error: {e}")
 
-    async def _run_interruptible(self, coroutine) -> None:
-        """Run one turn so that SIGINT cancels the turn and its child processes only."""
+    async def _ask_text(self, question: str) -> str:
+        """Ask a one-line question without blocking the event loop.
+
+        Ctrl+C here interrupts the current turn or command instead of exiting Thwip.
+        """
+        try:
+            answer = await PromptSession().prompt_async(HTML(f"<b>{question}</b> "))
+        except (KeyboardInterrupt, EOFError):
+            raise TurnInterrupted from None
+        return answer.strip()
+
+    async def _ask_yes_no(self, question: str) -> bool:
+        return (await self._ask_text(question)).lower() in {"y", "yes"}
+
+    def _discard_interrupted_turn(self) -> None:
+        console.print()
+        if self.session.messages and self.session.messages[-1].role == "user":
+            self.session.messages.pop()
+            print_warning("Response interrupted. The unanswered message was removed; send it again or /switch.")
+        else:
+            print_warning("Interrupted.")
+
+    async def _run_interruptible(self, coroutine):
+        """Run one turn so that Ctrl+C cancels the turn and its child processes only."""
         loop = asyncio.get_running_loop()
         task = asyncio.ensure_future(coroutine)
         interrupted = False
@@ -229,20 +262,23 @@ class ThwipCLI:
         try:
             loop.add_signal_handler(signal.SIGINT, on_interrupt)
         except (NotImplementedError, RuntimeError, ValueError):
-            await task
-            return
+            try:
+                return await task
+            except TurnInterrupted:
+                self._discard_interrupted_turn()
+            return None
         try:
-            await task
+            return await task
         except asyncio.CancelledError:
             if not interrupted:
                 raise
-            if self.session.messages and self.session.messages[-1].role == "user":
-                self.session.messages.pop()
-            console.print()
-            print_warning("Response interrupted. The unanswered message was removed; send it again or /switch.")
+            self._discard_interrupted_turn()
+        except TurnInterrupted:
+            self._discard_interrupted_turn()
         finally:
             loop.remove_signal_handler(signal.SIGINT)
             signal.signal(signal.SIGINT, previous)
+        return None
 
     async def handle_command(self, cmd_line: str) -> str | None:
         """Handle slash commands."""
@@ -279,9 +315,11 @@ class ThwipCLI:
 
         elif cmd in ("/models", "/m"):
             target = self.registry.get_agent(arg1) if arg1 else self.current_agent
-            if target and getattr(target, "native_tools", False):
-                target.project = str(Path(self.session.project_path).resolve())
-                await target.refresh_models()
+            if target and (getattr(target, "native_tools", False) or target.is_configured()):
+                if getattr(target, "native_tools", False):
+                    target.project = str(Path(self.session.project_path).resolve())
+                with console.status("[dim]Refreshing model list...[/dim]"):
+                    await target.refresh_models()
                 if target.discovery_error:
                     print_warning(target.discovery_error)
             self.cmd_show_models(arg1, arg2)
@@ -292,8 +330,29 @@ class ThwipCLI:
         elif cmd == "/status":
             self.cmd_show_status()
 
-        elif cmd == "/limits":
+        elif cmd in ("/limits", "/usage"):
             self.cmd_show_limits()
+
+        elif cmd == "/model":
+            await self.cmd_model(arg1)
+
+        elif cmd == "/new":
+            self.cmd_new()
+
+        elif cmd == "/resume":
+            await self.cmd_resume(arg1)
+
+        elif cmd == "/compact":
+            await self.cmd_compact()
+
+        elif cmd == "/diff":
+            self.cmd_diff(arg1)
+
+        elif cmd == "/copy":
+            self.cmd_copy()
+
+        elif cmd == "/export":
+            self.cmd_export(cmd_line.partition(" ")[2].strip())
 
         elif cmd == "/detect":
             await self.registry.connect_native_agents(str(Path(self.session.project_path).resolve()))
@@ -322,25 +381,7 @@ class ThwipCLI:
                 path = self.session.save(arg2 or None)
                 print_success(f"Session saved to {path.name}")
             elif sub == "load":
-                loaded = Session.load(arg2)
-                if loaded:
-                    project = Path(loaded.project_path).expanduser().resolve()
-                    if not project.is_dir():
-                        print_error(f"Saved project directory '{loaded.project_path}' no longer exists.")
-                        return None
-                    agent = self.registry.get_agent(loaded.current_agent)
-                    if not agent:
-                        print_error(f"Saved agent '{loaded.current_agent}' is not available.")
-                        return None
-                    if not agent.get_model_info(loaded.current_model):
-                        loaded.current_model = agent.get_default_model()
-                        print_warning("The saved model is unavailable. Using the provider default.")
-                    self.session = loaded
-                    self.current_agent = agent
-                    self.tool_manager = ToolManager(str(project))
-                    print_success(f"Loaded session '{loaded.name}' with {len(loaded.messages)} messages.")
-                else:
-                    print_error(f"Session '{arg2}' not found.")
+                self._load_session(arg2)
             elif sub == "list":
                 self.cmd_list_sessions()
             elif sub == "clear":
@@ -353,6 +394,225 @@ class ThwipCLI:
             print_warning(f"Unknown command '{cmd}'. Type /help or /about for navigation guide.")
 
         return None
+
+    def _load_session(self, name: str) -> bool:
+        loaded = Session.load(name) if name else None
+        if not loaded:
+            print_error(f"Session '{name}' not found.")
+            return False
+        project = Path(loaded.project_path).expanduser().resolve()
+        if not project.is_dir():
+            print_error(f"Saved project directory '{loaded.project_path}' no longer exists.")
+            return False
+        agent = self.registry.get_agent(loaded.current_agent)
+        if not agent:
+            print_error(f"Saved agent '{loaded.current_agent}' is not available.")
+            return False
+        if not agent.get_model_info(loaded.current_model):
+            loaded.current_model = agent.get_default_model()
+            print_warning("The saved model is unavailable. Using the provider default.")
+        self.session = loaded
+        self.current_agent = agent
+        self.tool_manager = ToolManager(str(project))
+        print_success(f"Loaded session '{loaded.name}' with {len(loaded.messages)} messages.")
+        return True
+
+    async def cmd_model(self, model_id: str = "") -> None:
+        """Pick a model for the current agent, interactively or by ID, like /model in Codex and Claude Code."""
+        agent = self.current_agent
+        models = list(agent.available_models)
+        if not model_id:
+            if not models:
+                print_info("No models are listed for this agent yet. Use /models to refresh.")
+                return
+            console.print(f"\n[bold white]Models for {agent.display_name}:[/bold white]")
+            for index, model in enumerate(models, 1):
+                marker = " [dim](current)[/dim]" if model.id == self.session.current_model else ""
+                console.print(f"  [bold white]{index}.[/bold white] {model.id} [dim]{model.name} | {model.tier}[/dim]{marker}")
+            answer = await self._ask_text(f"Choose [1-{len(models)}] or type a model ID (Enter to cancel):")
+            if not answer:
+                print_info("Model unchanged.")
+                return
+            model_id = models[int(answer) - 1].id if answer.isdigit() and 1 <= int(answer) <= len(models) else answer
+        if not agent.get_model_info(model_id):
+            print_error(f"Unknown model '{model_id}' for {agent.display_name}. Use /models to see the list.")
+            return
+        if model_id not in {model.id for model in models}:
+            print_warning(f"'{model_id}' is not in the list reported by {agent.display_name}; the provider validates it on your next message.")
+        self.session.switch_agent(agent.name, model_id)
+        print_success(f"Model set to {model_id} on {agent.display_name}. Conversation preserved.")
+
+    def cmd_new(self) -> None:
+        """Start a fresh conversation, saving the current one first when it has content."""
+        if self.session.messages and getattr(self.config, "auto_save", False):
+            saved = self.session.save()
+            print_info(f"Previous conversation saved as {saved.stem}. Use /resume to return to it.")
+        self.session = Session(project_path=self.session.project_path, current_agent=self.current_agent.name,
+                               current_model=self.session.current_model)
+        print_success(f"Started new session {self.session.name}.")
+
+    async def cmd_resume(self, name: str = "") -> None:
+        """Resume a saved session by name or from a numbered list, like /resume in Codex and Claude Code."""
+        if name:
+            self._load_session(name)
+            return
+        sessions = Session.list_saved_sessions()
+        if not sessions:
+            print_info("No saved sessions found.")
+            return
+        console.print("\n[bold white]Saved sessions:[/bold white]")
+        for index, item in enumerate(sessions, 1):
+            console.print(f"  [bold white]{index}.[/bold white] {item['name']} [dim]{item['agent']}/{item['model']} | "
+                          f"{item['messages_count']} messages | {item['updated_at']}[/dim]")
+        answer = await self._ask_text(f"Resume [1-{len(sessions)}] (Enter to cancel):")
+        if answer.isdigit() and 1 <= int(answer) <= len(sessions):
+            self._load_session(sessions[int(answer) - 1]["name"])
+        elif answer:
+            self._load_session(answer)
+        else:
+            print_info("Nothing resumed.")
+
+    async def cmd_compact(self) -> None:
+        """Replace the conversation with a summary written by the current model.
+
+        The summary is plain text, so it stays portable across providers and keeps
+        a later /switch or /handoff small.
+        """
+        portable = self.session.to_portable_messages()
+        if len(portable) < 2:
+            print_info("Nothing to compact yet.")
+            return
+        if not self.current_agent.is_configured():
+            print_error(f"{self.current_agent.display_name} is not connected; /switch to a ready agent first.")
+            return
+        transcript = "\n\n".join(f"[{m['role'].title()}]\n{m['content']}" for m in portable)
+        request = ("Summarize the conversation below for another assistant that will continue it. Keep every decision, "
+                   "requirement, file path, command, error, and open task. Use short bullet points under the headings "
+                   "Context, Decisions, Open tasks. Do not add commentary.\n\n" + transcript)
+        summary = ""
+        with console.status("[dim]Compacting conversation...[/dim]"):
+            try:
+                stream = self.current_agent.chat(messages=[{"role": "user", "content": request}],
+                                                 model=self.session.current_model,
+                                                 system_prompt="You write faithful, compact summaries.", tools=None, stream=False)
+                async with contextlib.aclosing(stream) if hasattr(stream, "aclose") else contextlib.nullcontext(stream) as stream:
+                    async for event in stream:
+                        if isinstance(event, TextDelta):
+                            summary += event.content
+                        elif isinstance(event, LimitHit):
+                            print_warning(f"Provider limit while compacting: {event.message}")
+                            return
+            except TurnInterrupted:
+                raise
+            except Exception as exc:
+                print_error(f"Compaction failed: {exc}")
+                return
+        summary = summary.strip()
+        if not summary:
+            print_error("The model returned an empty summary; conversation unchanged.")
+            return
+        before = len(self.session.messages)
+        self.session.clear_context()
+        self.session.add_user_message("Summary of the conversation so far, compacted by thwip:\n\n" + summary)
+        self.session.add_assistant_message("Understood. I will continue from this summary.",
+                                           agent_name=self.current_agent.name, model=self.session.current_model,
+                                           company=self.current_agent.company)
+        print_success(f"Compacted {before} messages into a summary. /history shows it; /handoff shows the new size.")
+
+    def cmd_diff(self, arg: str = "") -> None:
+        """Show the project's git diff, like /diff in Codex."""
+        from rich.syntax import Syntax
+
+        from thwip.tools.git_ops import GitOps
+
+        git = GitOps(self.session.project_path)
+        staged = arg.lower() in {"--staged", "staged", "--cached"}
+        output = git.diff(staged=staged)
+        if output.startswith(("Git error", "Git operation failed")):
+            print_error(output)
+            return
+        if output == "Success." or not output.strip():
+            print_info("No staged changes." if staged else "Working tree clean (use /diff staged for the index).")
+            return
+        limit = 20000
+        console.print(Syntax(output[:limit], "diff", theme="ansi_dark", word_wrap=False))
+        if len(output) > limit:
+            print_info(f"Diff truncated to {limit:,} characters.")
+
+    def cmd_copy(self) -> None:
+        """Copy the last assistant response to the clipboard, like /copy in Claude Code."""
+        import subprocess
+
+        last = next((m for m in reversed(self.session.messages) if m.role == "assistant"), None)
+        if not last:
+            print_info("No assistant response to copy yet.")
+            return
+        commands = [["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]]
+        for command in commands:
+            if shutil.which(command[0]):
+                try:
+                    subprocess.run(command, input=last.content.encode(), check=True, timeout=5)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    print_error(f"Clipboard command failed: {exc}")
+                    return
+                print_success(f"Copied {len(last.content):,} characters from {last.model or last.agent_name}.")
+                return
+        print_error("No clipboard tool found (pbcopy, wl-copy, xclip, or xsel).")
+
+    def cmd_export(self, target: str = "") -> None:
+        """Write the conversation as Markdown with model attribution, for sharing or handing to another tool."""
+        if not self.session.messages:
+            print_info("Nothing to export yet.")
+            return
+        path = Path(target).expanduser() if target else Path(self.session.project_path) / f"{self.session.name}.md"
+        if not path.is_absolute():
+            path = Path(self.session.project_path) / path
+        lines = [f"# thwip conversation {self.session.name}", "",
+                 f"Project: {os.path.abspath(self.session.project_path)}  ", f"Exported: {time.strftime('%Y-%m-%d %H:%M')}", ""]
+        for message in self.session.messages:
+            if message.role == "user":
+                lines += ["## You", "", message.content, ""]
+            elif message.role == "assistant":
+                who = " / ".join(part for part in (message.company, message.model or message.agent_name) if part)
+                lines += [f"## Assistant ({who})", "", message.content, ""]
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(lines), encoding="utf-8")
+        except OSError as exc:
+            print_error(f"Could not write export: {exc}")
+            return
+        print_success(f"Exported {len(self.session.messages)} messages to {path}")
+
+    async def cmd_shell(self, command: str) -> None:
+        """Run a shell command in the project directory and show its output; nothing is sent to a model."""
+        from thwip.tools.terminal import TerminalRunner
+
+        if not command:
+            print_info("Usage: !<command>  (runs in the project directory)")
+            return
+        runner = TerminalRunner(self.session.project_path)
+        output = await runner.run_command_async(command, timeout=120)
+        console.print(Text(output[:20000] or "(no output)"))
+        if len(output) > 20000:
+            print_info("Output truncated to 20,000 characters.")
+
+    def _expand_mentions(self, text: str) -> str:
+        """Attach files referenced as @path (inside the project) to the message, like @ mentions in Codex and Claude Code."""
+        mentions = re.findall(r"(?<!\S)@([\w./\-]+)", text)
+        if not mentions:
+            return text
+        attachments = []
+        project = Path(self.session.project_path).resolve()
+        for mention in dict.fromkeys(mentions):
+            candidate = (project / mention).resolve()
+            if not candidate.is_file() or project not in candidate.parents:
+                continue
+            content = self.tool_manager.execute_tool("read_file", {"file_path": mention, "max_lines": 400})
+            attachments.append(f"[Attached file: {mention}]\n{content}")
+            print_info(f"Attached {mention}")
+        if not attachments:
+            return text
+        return text + "\n\n" + "\n\n".join(attachments)
 
     def cmd_show_about(self) -> None:
         """Display the complete About section and navigation guide."""
@@ -445,6 +705,15 @@ class ThwipCLI:
             ("/status", "Display current session, project, and token stats"),
             ("/limits", "View token usage, quota, and spend metrics"),
             ("/detect", "Re-scan system for newly installed coding agents"),
+            ("/model [id]", "Pick a model for the current agent (interactive list or ID)"),
+            ("/new", "Start a fresh conversation (current one is saved first)"),
+            ("/resume [name]", "Resume a saved session from a numbered list"),
+            ("/compact", "Summarize the conversation with the current model to free context"),
+            ("/diff [staged]", "Show the project's git diff"),
+            ("/copy", "Copy the last response to the clipboard"),
+            ("/export [path]", "Write the conversation to a Markdown file with model attribution"),
+            ("!<command>", "Run a shell command in the project without a model"),
+            ("@path in a message", "Attach a project file's content to your message"),
             ("/session save [name]", "Save current chat session"),
             ("/session load <name>", "Load a previously saved session"),
             ("/session list", "List all saved sessions"),
@@ -666,6 +935,12 @@ class ThwipCLI:
             title = f"Available Models for {agent_target.display_name}"
             if tier_filter:
                 title += f" ({tier_filter.title()} Tier)"
+            if getattr(agent_target, "native_tools", False):
+                title += " (reported by the CLI)"
+            elif getattr(agent_target, "catalog_source", "bundled") == "live":
+                title += " (live from provider)"
+            elif agent_target.name != "ollama":
+                title += " (bundled fallback; add a key for the live list)"
         else:
             agents_to_show = [agent for agent in self.registry.list_agents() if agent.is_installed()]
             title = f"All {tier_filter.title()} Tier Models Across Providers"
@@ -693,8 +968,14 @@ class ThwipCLI:
                     continue
 
                 ctx = f"{m.context_window:,}" if m.context_window else "-"
-                price = ("CLI account" if getattr(ag, "native_tools", False) else
-                         f"${m.pricing_input} / ${m.pricing_output}" if m.pricing_input else "Free")
+                if getattr(ag, "native_tools", False):
+                    price = "CLI account"
+                elif m.pricing_input or m.pricing_output:
+                    price = f"${m.pricing_input} / ${m.pricing_output}"
+                elif ag.name == "ollama":
+                    price = "Free (local)"
+                else:
+                    price = "See provider"
                 tier_badge = tier_styles.get(m_tier, m_tier.title())
                 def_mark = " [dim](default)[/dim]" if m.is_default else ""
 
@@ -1048,52 +1329,57 @@ class ThwipCLI:
                         tools=tools,
                         stream=self.config.stream if tools is None else False,
                     )
-
-                    async for event in response_stream:
-                        if isinstance(event, TextDelta):
-                            round_text += event.content
-                            live.update(self._render_response(collected_text + round_text))
-                        elif isinstance(event, ThinkingDelta):
-                            round_thinking += event.content
-                            live.update(
-                                Panel(
-                                    Text(round_thinking, style="dim italic"),
-                                    title="Reasoning / Thinking",
-                                    border_style="dim magenta",
-                                    box=box.MINIMAL,
+                    # Close the adapter generator deterministically on interruption so child processes stop.
+                    closer = contextlib.aclosing(response_stream) if hasattr(response_stream, "aclose") else contextlib.nullcontext(response_stream)
+                    async with closer as response_stream:
+                        async for event in response_stream:
+                            if isinstance(event, TextDelta):
+                                round_text += event.content
+                                live.update(self._render_response(collected_text + round_text))
+                            elif isinstance(event, ThinkingDelta):
+                                round_thinking += event.content
+                                live.update(
+                                    Panel(
+                                        Text(round_thinking, style="dim italic"),
+                                        title="Reasoning / Thinking",
+                                        border_style="dim magenta",
+                                        box=box.MINIMAL,
+                                    )
                                 )
-                            )
-                        elif isinstance(event, ToolUseStart):
-                            tool_requests.append(event)
-                        elif isinstance(event, NativePermission):
-                            live.stop()
-                            console.print(Panel(Text(event.description), title="Native tool permission"))
-                            event.approved = input("Allow this operation once? [y/N]: ").strip().lower() in {"y", "yes"}
-                            live.start()
-                        elif isinstance(event, NativeActivity):
-                            live.stop()
-                            print_info(event.description)
-                            live.start()
-                        elif isinstance(event, AgentDone):
-                            native_state = event.native_state
-                            used = event.usage.input_tokens + event.usage.output_tokens
-                            total_tokens += used
-                            self.usage_tracker.record_usage(
-                                agent_name=self.current_agent.name,
-                                model="" if native else self.session.current_model,
-                                input_tokens=event.usage.input_tokens,
-                                output_tokens=event.usage.output_tokens,
-                            )
-                        elif isinstance(event, LimitHit):
-                            limit_hit = True
-                            live.stop()
-                            self.usage_tracker.record_limit_hit(self.current_agent.name, event.message)
-                            if self.session.observed_tool_results != initial_tool_results:
-                                print_warning("Provider limit after tool execution. Not retrying automatically: "
-                                              "review workspace changes before continuing.")
-                            else:
-                                await self.handle_limit_failover(event, attempted)
-                            break
+                            elif isinstance(event, ToolUseStart):
+                                tool_requests.append(event)
+                            elif isinstance(event, NativePermission):
+                                live.stop()
+                                console.print(Panel(Text(event.description), title="Native tool permission"))
+                                event.approved = await self._ask_yes_no("Allow this operation once? [y/N]:")
+                                live.start()
+                            elif isinstance(event, NativeActivity):
+                                live.stop()
+                                print_info(event.description)
+                                live.start()
+                            elif isinstance(event, AgentDone):
+                                native_state = event.native_state
+                                used = event.usage.input_tokens + event.usage.output_tokens
+                                total_tokens += used
+                                self.usage_tracker.record_usage(
+                                    agent_name=self.current_agent.name,
+                                    model="" if native else self.session.current_model,
+                                    input_tokens=event.usage.input_tokens,
+                                    output_tokens=event.usage.output_tokens,
+                                )
+                            elif isinstance(event, LimitHit):
+                                limit_hit = True
+                                live.stop()
+                                self.usage_tracker.record_limit_hit(self.current_agent.name, event.message)
+                                if self.session.observed_tool_results != initial_tool_results:
+                                    print_warning("Provider limit after tool execution. Not retrying automatically: "
+                                                  "review workspace changes before continuing.")
+                                else:
+                                    await self.handle_limit_failover(event, attempted)
+                                break
+                except TurnInterrupted:
+                    live.stop()
+                    raise
                 except Exception as exc:
                     live.stop()
                     print_error(f"Agent error: {exc}")
@@ -1181,7 +1467,9 @@ class ThwipCLI:
             agent = self.registry.get_agent(agent_name)
             if not agent or agent.name in attempted or agent not in ready or agent.name in seen:
                 continue
-            chosen_model = model if separator and agent.get_model_info(model) else agent.get_default_model()
+            # Only honor a configured chain model that the provider actually lists; otherwise use its default.
+            listed = {entry.id for entry in agent.available_models}
+            chosen_model = model if separator and model in listed else agent.get_default_model()
             candidates.append((agent, chosen_model))
             seen.add(agent.name)
         candidates.extend(

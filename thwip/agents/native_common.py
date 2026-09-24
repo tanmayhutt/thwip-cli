@@ -8,9 +8,11 @@ from datetime import UTC
 from thwip.agents.base import LimitStatus
 
 _SECRET_PATTERN = re.compile(r"(?i)(?:sk-|key-|token|bearer\s+)?[A-Za-z0-9_\-]{32,}")
+# Phrases observed in Codex ("You've hit your usage limit for ..."), Claude Code ("usage limit reached",
+# "rate limited", "credit balance too low", "spend limit reached", "overloaded", 529) and Google (RESOURCE_EXHAUSTED).
 _LIMIT_PATTERN = re.compile(
-    r"(?i)rate.?limit|usage.?limit|quota|resource_exhausted|too many requests|\b429\b|insufficient.?(?:quota|credits)|"
-    r"limit (?:has been )?(?:reached|exceeded)|out of credits"
+    r"(?i)rate.?limit|usage.?limit|spend.?limit|quota|resource_exhausted|too many requests|\b429\b|\b529\b|overloaded|"
+    r"insufficient.?(?:quota|credits)|credit balance|limit (?:has been )?(?:reached|exceeded)|out of credits|hit your limit"
 )
 
 
@@ -26,7 +28,7 @@ def classify_limit(text: str) -> LimitStatus | None:
     if not text or not _LIMIT_PATTERN.search(text):
         return None
     lowered = text.lower()
-    if "quota" in lowered or "usage" in lowered or "credits" in lowered or "exhausted" in lowered:
+    if any(word in lowered for word in ("quota", "usage", "credit", "exhausted", "spend", "hit your limit")):
         return LimitStatus.QUOTA_EXHAUSTED
     return LimitStatus.RATE_LIMITED
 
