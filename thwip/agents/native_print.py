@@ -13,6 +13,7 @@ import contextlib
 import json
 import os
 import shutil
+import uuid
 from pathlib import Path
 
 from thwip.agents.base import (
@@ -28,7 +29,7 @@ from thwip.agents.base import (
     ThinkingDelta,
     TokenUsage,
 )
-from thwip.agents.native_common import build_native_prompt, classify_limit, network_hint, scrub
+from thwip.agents.native_common import build_incremental_prompt, classify_limit, network_hint, scrub
 from thwip.tools.terminal import terminate_process_tree
 
 TURN_TIMEOUT = 600
@@ -181,27 +182,53 @@ class PrintAgent(BaseAgent):
 
     # --- Chat ---
 
-    def _turn_command(self, prompt: str, model: str, system_prompt: str | None) -> tuple[list[str], str | None]:
+    def _turn_command(self, prompt: str, model: str, system_prompt: str | None,
+                      resume_id: str | None, new_id: str | None) -> tuple[list[str], str | None]:
         if self.name == "claude":
             command = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                        "--model", model, "--allowedTools", "Read,Glob,Grep,LS,WebFetch,WebSearch"]
-            if system_prompt:
+            command += ["--resume", resume_id] if resume_id else ["--session-id", new_id]
+            if system_prompt and not resume_id:
                 command += ["--append-system-prompt", system_prompt]
             return command, prompt
-        return ["--print", prompt, "--output-format", "stream-json", "--model", model,
-                "--print-timeout", f"{TURN_TIMEOUT}s"], None
+        command = ["--print", prompt, "--output-format", "stream-json", "--model", model,
+                   "--print-timeout", f"{TURN_TIMEOUT}s"]
+        if resume_id:
+            command += ["--conversation", resume_id]
+        return command, None
 
-    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True):
+    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None):
         chosen = model or self.get_default_model()
-        prompt = build_native_prompt(messages, None if self.name == "claude" else system_prompt)
-        command, stdin_text = self._turn_command(prompt, chosen, system_prompt)
+        resume_id = resume.get("id") if isinstance(resume, dict) else None
+        synced = resume.get("synced", 0) if isinstance(resume, dict) else 0
+        if resume_id:
+            prompt, _full = build_incremental_prompt(messages, None if self.name == "claude" else system_prompt, synced)
+            try:
+                async for event in self._turn(prompt, chosen, system_prompt, resume_id=resume_id, new_id=None):
+                    yield event
+                return
+            except RuntimeError as exc:
+                # The CLI could not continue that session (deleted, different machine, expired).
+                yield NativeActivity(description=f"Previous {self.display_name} session unavailable "
+                                                 f"({scrub(str(exc), 120)}); sending the full conversation to a new one.")
+        prompt, _full = build_incremental_prompt(messages, None if self.name == "claude" else system_prompt, 0)
+        async for event in self._turn(prompt, chosen, system_prompt, resume_id=None, new_id=str(uuid.uuid4())):
+            yield event
+
+    async def _turn(self, prompt, model, system_prompt, resume_id, new_id):
+        command, stdin_text = self._turn_command(prompt, model, system_prompt, resume_id, new_id)
         process = await self._start_process(command, stdin_text)
         usage = TokenUsage()
         streamed_text = False
         finished = False
+        session_id = resume_id or (new_id if self.name == "claude" else None)
         try:
             async for event in self._iterate(process):
                 kind = event.get("type") or event.get("event")
+                if kind == "system" and event.get("session_id"):
+                    session_id = event["session_id"]
+                elif kind == "init" and isinstance(event.get("init"), dict) or kind == "init":
+                    session_id = event.get("conversation_id") or session_id
                 if self.name == "claude":
                     result = self._claude_event(event, kind)
                 else:
@@ -214,7 +241,7 @@ class PrintAgent(BaseAgent):
                             yield TextDelta(content=item)
                     elif isinstance(item, AgentDone):
                         finished = True
-                        yield AgentDone(usage=usage)
+                        yield AgentDone(usage=usage, native_session={"id": session_id} if session_id else {})
                         return
                     else:
                         if isinstance(item, TextDelta):

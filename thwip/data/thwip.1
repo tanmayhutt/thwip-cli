@@ -1,0 +1,122 @@
+.TH THWIP 1 "September 2026" "thwip" "User Commands"
+.SH NAME
+thwip \- universal coding agent multiplexer for the terminal
+.SH SYNOPSIS
+.B thwip
+.RI [ \-\-project " PATH" ]
+.br
+.B thwip man
+.br
+.B thwip install-man
+.br
+.B thwip \-\-version
+.SH DESCRIPTION
+.B thwip
+finds the AI coding agents already installed and signed in on this machine
+(Codex, Claude Code, and the Antigravity CLI), connects to each through its own
+supported protocol, and lets you chat with any of them from one REPL. You can
+switch provider or model mid-conversation, keep the text history, and fail over
+to another provider when one reports an exhausted usage limit. Direct API keys
+for Anthropic, Google, OpenAI, DeepSeek, Groq, OpenRouter, and a local Ollama
+server are also supported.
+.PP
+No credential is copied. Installed CLIs hold their own login, enforce their own
+sandbox and approvals, and bill their own plan. Native connections are read-only
+by default; Codex asks before operations outside its sandbox.
+.SH OPTIONS
+.TP
+.BI \-p ", " \-\-project " PATH"
+Open the REPL for the given project directory instead of the saved or current one.
+.TP
+.B \-\-version
+Print the version and exit.
+.TP
+.B \-h ", " \-\-help
+Print usage and exit.
+.SH SUBCOMMANDS
+.TP
+.B man
+Show this manual page.
+.TP
+.B install-man
+Copy this manual page to
+.I ~/.local/share/man/man1
+so that
+.B man thwip
+works.
+.SH REPL COMMANDS
+.TP
+.B /switch [agent] [model]
+Switch provider (and optionally model). A handoff preview is shown first. Alias:
+.BR /sw ", " /s .
+.TP
+.B /model [id]
+Pick a model for the current provider from a numbered list or by ID.
+.TP
+.B /handoff [agent] [model]
+Preview what transfers, what is lost, and the context fit without switching.
+.TP
+.B /agents ", " /models [agent|tier] ", " /detect
+List detected agents, list models (live from the CLI or provider), rescan.
+.TP
+.B /compact
+Ask the current model for a plain-text summary and replace the history with it.
+.TP
+.B /new ", " /resume [name] ", " /session save|load|list|clear [name]
+Start a fresh conversation, resume a saved one, or manage saved sessions.
+.TP
+.B /diff [staged] ", " /copy ", " /export [path]
+Show the project git diff, copy the last response, export the conversation as
+Markdown with model attribution.
+.TP
+.B /limits ", " /usage ", " /cost ", " /status ", " /history
+Usage windows reported by each CLI account, API cost estimates, session status,
+and the conversation with model badges.
+.TP
+.B /key [provider]
+Enter a direct API key with hidden input.
+.TP
+.B /native codex
+Save the session and replace thwip with the Codex CLI itself.
+.TP
+.B !command
+Run a shell command in the project without involving a model.
+.TP
+.B @path
+Attach a project file's content to your message.
+.TP
+.B /help ", " /about ", " /quit
+.SH KEYS
+.TP
+.B Ctrl+S
+Open the switcher.
+.TP
+.B Ctrl+T
+Show status.
+.TP
+.B Ctrl+C
+Interrupt the current response, command, or prompt. At the main prompt, exit.
+.SH ENVIRONMENT
+.TP
+.B THWIP_CONFIG_DIR
+Configuration directory (default
+.IR ~/.thwip ).
+.TP
+.B THWIP_OPENAI_BASE_URL ", " THWIP_ANTHROPIC_BASE_URL ", " THWIP_GOOGLE_BASE_URL ", " THWIP_DEEPSEEK_BASE_URL ", " THWIP_GROQ_BASE_URL ", " THWIP_OPENROUTER_BASE_URL
+Point a direct adapter at a proxy, gateway, or OpenAI-compatible server.
+.TP
+.B ANTHROPIC_API_KEY ", " GEMINI_API_KEY ", " OPENAI_API_KEY ", " DEEPSEEK_API_KEY ", " GROQ_API_KEY ", " OPENROUTER_API_KEY
+Direct API keys. A key takes precedence over the native CLI connection for that provider.
+.SH FILES
+.TP
+.I ~/.thwip/config.toml
+Defaults, keys entered with /key, endpoint overrides, fallback chain, display settings.
+.TP
+.I ~/.thwip/sessions/
+Saved sessions, including the native CLI session IDs used to resume each provider.
+.SH SEE ALSO
+.BR codex (1),
+.BR claude (1),
+.BR agy (1)
+.PP
+https://github.com/tanmayhutt/thwip-cli

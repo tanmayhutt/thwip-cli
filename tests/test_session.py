@@ -128,3 +128,24 @@ def test_config_file_permissions_and_source_are_preserved(tmp_path, monkeypatch)
 
     assert loaded.key_sources["openai"] == "config.toml"
     assert get_config_path().stat().st_mode & 0o777 == 0o600
+
+
+def test_native_sessions_are_tracked_validated_and_persisted(tmp_path, monkeypatch):
+    from thwip.session import Session
+
+    monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path))
+    session = Session(project_path=str(tmp_path), current_agent="openai", current_model="m")
+    assert session.native_session("openai") is None
+    session.add_user_message("q")
+    session.add_assistant_message("a", agent_name="openai", model="m")
+    session.set_native_session("openai", "thread-1", "m")
+    assert session.native_session("openai") == {"id": "thread-1", "synced": 2, "model": "m"}
+    session.native_sessions["claude"] = {"id": "x", "synced": 99}
+    assert session.native_session("claude") is None, "a record that claims more messages than exist is ignored"
+    path = session.save("native-track")
+    loaded = Session.load("native-track")
+    assert loaded.native_session("openai") == {"id": "thread-1", "synced": 2, "model": "m"}
+    loaded.clear_context()
+    assert loaded.native_sessions == {}
+    path.write_text(path.read_text().replace('"synced": 2', '"synced": "2"'))
+    assert Session.load("native-track") is None, "malformed native session records reject the file"

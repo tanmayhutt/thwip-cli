@@ -22,7 +22,7 @@ from thwip.agents.base import (
     ThinkingDelta,
     TokenUsage,
 )
-from thwip.agents.native_common import build_native_prompt, classify_limit, scrub, window_label
+from thwip.agents.native_common import build_incremental_prompt, classify_limit, scrub, window_label
 from thwip.agents.native_rpc import NativeRPC
 
 
@@ -69,6 +69,9 @@ class NativeAgent(BaseAgent):
         self.discovery_error = "Not connected yet"
         # Usage windows the CLI reports for its own account; informational only.
         self.limit_windows: list[dict] = []
+        # One long-lived app-server process per Thwip run; threads are resumed across turns.
+        self._rpc = None
+        self._thread_id: str | None = None
 
     def is_installed(self):
         return shutil.which(self.binary) is not None
@@ -146,20 +149,60 @@ class NativeAgent(BaseAgent):
             if rpc:
                 await rpc.close()
 
-    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True):
-        rpc = await self._connect()
+    async def _live_rpc(self):
+        """Reuse the running app-server when it is still alive; otherwise start a new one."""
+        rpc = self._rpc
+        if rpc is not None and rpc.process is not None and rpc.process.returncode is None:
+            return rpc
+        self._rpc = None
+        self._thread_id = None
+        self._rpc = await self._connect()
+        return self._rpc
+
+    async def close(self):
+        """Stop the app-server process (on exit). Threads stay resumable on disk."""
+        rpc, self._rpc, self._thread_id = self._rpc, None, None
+        if rpc is not None:
+            await rpc.close()
+
+    async def _open_thread(self, rpc, model, system_prompt, resume_id):
+        """Resume the recorded Codex thread when possible; otherwise start a fresh persistent one.
+
+        Returns (thread_id, resumed).
+        """
+        common = {"cwd": self.project, "sandbox": "read-only", "approvalPolicy": "on-request",
+                  **({"developerInstructions": system_prompt} if system_prompt else {})}
+        if resume_id:
+            if self._thread_id == resume_id:
+                return resume_id, True
+            try:
+                await rpc.request("thread/resume", {"threadId": resume_id, "model": model, **common})
+                self._thread_id = resume_id
+                return resume_id, True
+            except (RuntimeError, TimeoutError, KeyError, TypeError):
+                pass
+        session = await rpc.request("thread/start", {"model": model, "ephemeral": False, **common})
+        self._thread_id = session["thread"]["id"]
+        return self._thread_id, False
+
+    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None):
+        rpc = await self._live_rpc()
         event_task = None
+        chosen = model or self.get_default_model()
+        resume_id = resume.get("id") if isinstance(resume, dict) else None
+        synced = resume.get("synced", 0) if isinstance(resume, dict) else 0
         try:
-            # A fresh native session receives only portable text; tool state stays native within the turn.
-            prompt = build_native_prompt(messages, None)
-            # Codex App Server sandbox modes are kebab-case; camelCase is rejected as an invalid request.
-            session = await rpc.request("thread/start", {
-                "cwd": self.project, "model": model or self.get_default_model(), "sandbox": "read-only",
-                "approvalPolicy": "on-request", "ephemeral": True,
-                **({"developerInstructions": system_prompt} if system_prompt else {}),
-            })
-            thread_id = session["thread"]["id"]
-            await rpc.request("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}]})
+            thread_id, resumed = await self._open_thread(rpc, chosen, system_prompt, resume_id)
+            if resume_id and not resumed:
+                yield NativeActivity(description="Previous Codex thread unavailable; sending the full conversation to a new one.")
+            prompt, _full = build_incremental_prompt(messages, None, synced if resumed else 0)
+            # Drop notifications left over from an earlier turn on this process.
+            while not rpc.events.empty():
+                stale = rpc.events.get_nowait()
+                if stale.get("method") == "_closed":
+                    raise RuntimeError("Native CLI exited before the turn started.")
+            await rpc.request("turn/start", {"threadId": thread_id, "model": chosen,
+                                             "input": [{"type": "text", "text": prompt}]})
             usage = TokenUsage()
             started_items = {}
             text_items = set()
@@ -174,6 +217,7 @@ class NativeAgent(BaseAgent):
                 event = event_task.result()
                 method, params = event.get("method", ""), event.get("params", {})
                 if method == "_closed":
+                    self._rpc = None
                     raise RuntimeError("Native CLI exited before completing the response.")
                 if "id" in event:
                     if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
@@ -190,7 +234,8 @@ class NativeAgent(BaseAgent):
                 elif method in {"item/reasoning/summaryTextDelta", "item/reasoning/textDelta"}:
                     yield ThinkingDelta(content=params.get("delta", ""))
                 elif method == "error":
-                    message = scrub(params.get("error", params).get("message", "") if isinstance(params.get("error", params), dict) else params)
+                    detail = params.get("error", params)
+                    message = scrub(detail.get("message", "") if isinstance(detail, dict) else detail)
                     limit = classify_limit(message)
                     if limit:
                         yield LimitHit(error_type=limit, message=message)
@@ -231,19 +276,13 @@ class NativeAgent(BaseAgent):
                         detail = f" Codex said: {message}" if message else ""
                         raise RuntimeError("Codex could not complete the turn. Check its login, model access, "
                                            f"or usage limit.{detail}")
-                    yield AgentDone(usage=usage)
+                    yield AgentDone(usage=usage, native_session={"id": thread_id})
                     return
-                elif method == "session/update":
-                    update = params.get("update", {})
-                    kind = update.get("sessionUpdate")
-                    if kind == "agent_message_chunk" and update.get("content", {}).get("type") == "text":
-                        yield TextDelta(content=update["content"].get("text", ""))
-                    elif kind in {"tool_call", "tool_call_update"}:
-                        yield NativeActivity(description=update.get("title", "Native tool activity"))
-        finally:
+        except BaseException:
+            # Any failure or interruption abandons the process; the thread itself remains resumable.
             if event_task and not event_task.done():
                 event_task.cancel()
-            if event_task:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await event_task
-            await rpc.close()
+            await self.close()
+            raise

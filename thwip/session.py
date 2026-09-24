@@ -66,13 +66,36 @@ class Session:
     messages: list[Message] = field(default_factory=list)
     observed_tool_results: int = 0
     tool_tracking_complete: bool = True
+    # Per-provider native CLI sessions: {"openai": {"id": "...", "synced": 4, "model": "..."}}.
+    # `synced` is how many portable messages that native session has already seen, so a provider
+    # you return to receives only what it missed. Cleared whenever the text history is replaced.
+    native_sessions: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def clear_context(self) -> None:
-        """Clear text and its associated handoff accounting together."""
+        """Clear text, handoff accounting, and native session bookkeeping together."""
         self.messages.clear()
         self.observed_tool_results = 0
         self.tool_tracking_complete = True
+        self.native_sessions.clear()
         self.updated_at = time.time()
+
+    def native_session(self, provider: str) -> dict[str, Any] | None:
+        """Return a consistent native session record for the provider, or None."""
+        record = self.native_sessions.get(provider)
+        if not isinstance(record, dict) or not isinstance(record.get("id"), str) or not record["id"]:
+            return None
+        synced = record.get("synced", 0)
+        if type(synced) is not int or synced < 0 or synced > len(self.to_portable_messages()):
+            return None
+        return record
+
+    def set_native_session(self, provider: str, session_id: str, model: str = "") -> None:
+        """Record that the provider's native session has seen every portable message so far."""
+        self.native_sessions[provider] = {"id": session_id, "synced": len(self.to_portable_messages()), "model": model}
+        self.updated_at = time.time()
+
+    def forget_native_session(self, provider: str) -> None:
+        self.native_sessions.pop(provider, None)
 
     def record_tool_result(self) -> None:
         """Count transient results without persisting potentially sensitive outputs."""
@@ -145,6 +168,7 @@ class Session:
             "messages": [m.to_dict() for m in self.messages],
             "observed_tool_results": self.observed_tool_results,
             "tool_tracking_complete": self.tool_tracking_complete,
+            "native_sessions": self.native_sessions,
         }
         temporary_path: Path | None = None
         try:
@@ -214,6 +238,16 @@ class Session:
                     return None
                 if any(not isinstance(raw.get(key, ""), str) for key in ("agent_name", "model", "company")):
                     return None
+            native_sessions = data.get("native_sessions", {})
+            if not isinstance(native_sessions, dict):
+                return None
+            for provider, record in native_sessions.items():
+                if not isinstance(provider, str) or not isinstance(record, dict):
+                    return None
+                if not isinstance(record.get("id"), str) or type(record.get("synced", 0)) is not int or record.get("synced", 0) < 0:
+                    return None
+                if not isinstance(record.get("model", ""), str):
+                    return None
             session = cls(
                 id=data.get("id", ""),
                 name=data.get("name", "saved-session"),
@@ -226,6 +260,8 @@ class Session:
                 messages=[Message.from_dict(m) for m in data.get("messages", [])],
                 observed_tool_results=data.get("observed_tool_results", 0),
                 tool_tracking_complete=data.get("tool_tracking_complete", False),
+                native_sessions={k: {"id": v["id"], "synced": v.get("synced", 0), "model": v.get("model", "")}
+                                 for k, v in native_sessions.items()},
             )
             return session
         except Exception:

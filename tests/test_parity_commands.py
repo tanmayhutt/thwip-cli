@@ -171,3 +171,30 @@ def test_mentions_attach_project_files_only(cli, tmp_path):
     assert "secret plan" in expanded and "[Attached file: notes.md]" in expanded
     assert "missing.txt]" not in expanded and "passwd]" not in expanded
     assert cli._expand_mentions("email me at user@example.com") == "email me at user@example.com"
+
+
+def test_incremental_prompt_builder():
+    from thwip.agents.native_common import build_incremental_prompt
+
+    history = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]
+    full, is_full = build_incremental_prompt(history, "sys", 0)
+    assert is_full and "[User]\na" in full and full.endswith("c")
+    only_new, is_full = build_incremental_prompt(history, "sys", 2)
+    assert (only_new, is_full) == ("c", False)
+    _bad, is_full = build_incremental_prompt(history, None, 7)
+    assert is_full, "a synced count beyond the history falls back to the full transcript"
+
+
+def test_man_page_commands(tmp_path, monkeypatch, capsys):
+    from thwip import cli as cli_module
+
+    monkeypatch.setenv("THWIP_MAN_DIR", str(tmp_path / "man1"))
+    assert cli_module.MAN_PAGE.is_file() and cli_module.MAN_PAGE.read_text().startswith(".TH THWIP 1")
+    assert cli_module.run_man_command("install-man") == 0
+    assert (tmp_path / "man1" / "thwip.1").read_text() == cli_module.MAN_PAGE.read_text()
+    monkeypatch.setattr("thwip.cli.shutil.which", lambda name: None)
+    assert cli_module.run_man_command("man") == 0
+    assert "universal coding agent multiplexer" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as info:
+        cli_module.main(["install-man"])
+    assert info.value.code == 0

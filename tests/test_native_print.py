@@ -233,3 +233,53 @@ async def test_antigravity_network_reset_gets_a_network_hint(monkeypatch):
         "API error (attempt 1): request failed: Post \"https://example.googleapis.com\": read tcp 10.0.0.2:5->1.2.3.4:443: read: connection reset by peer"}}])
     with pytest.raises(RuntimeError, match="connection reset by peer.*network or a firewall"):
         await collect(agent, model="gemini-3.8-flash-high")
+
+
+@pytest.mark.asyncio
+async def test_claude_new_session_id_then_resume_flag(monkeypatch):
+    agent = PrintAgent("claude", ".")
+    calls = install_fake(monkeypatch, agent, [{"type": "system", "subtype": "init", "session_id": "abc-123"},
+                                              {"type": "result", "subtype": "success", "result": "hi", "usage": {}}])
+    events = await collect(agent)
+    assert events[-1].native_session == {"id": "abc-123"}
+    command, stdin_text = calls[0]
+    assert "--session-id" in command and "--resume" not in command and "--append-system-prompt" in command
+    assert stdin_text == "hello"
+    # Resume: only the new message, no system prompt re-sent, --resume flag used.
+    calls.clear()
+    history = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}, {"role": "user", "content": "next"}]
+    events = [e async for e in agent.chat(history, model="fable", system_prompt="Be brief.", resume={"id": "abc-123", "synced": 2})]
+    command, stdin_text = calls[0]
+    assert command[command.index("--resume") + 1] == "abc-123" and "--append-system-prompt" not in command
+    assert stdin_text == "next" and events[-1].native_session == {"id": "abc-123"}
+
+
+@pytest.mark.asyncio
+async def test_antigravity_conversation_resume_and_fallback(monkeypatch):
+    agent = PrintAgent("google", ".")
+    ok = [{"event": "init", "conversation_id": "conv-1", "init": {}},
+          {"event": "result", "result": {"status": "SUCCESS", "response": "hi", "usage": {}}}]
+    calls = install_fake(monkeypatch, agent, ok)
+    events = await collect(agent, model="gemini-3.8-flash-high")
+    assert events[-1].native_session == {"id": "conv-1"} and "--conversation" not in calls[0][0]
+
+    # Resumed turn passes --conversation and only the new text.
+    calls.clear()
+    history = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}, {"role": "user", "content": "next"}]
+    events = [e async for e in agent.chat(history, model="gemini-3.8-flash-high", resume={"id": "conv-1", "synced": 2})]
+    command = calls[0][0]
+    assert command[command.index("--conversation") + 1] == "conv-1" and command[command.index("--print") + 1] == "next"
+
+    # If the resumed process fails, a fresh conversation gets the full transcript.
+    attempts = []
+    async def start(command, stdin_text=None):
+        attempts.append(command)
+        if "--conversation" in command:
+            return FakeProcess([{"event": "result", "result": {"status": "ERROR", "error": "conversation not found"}}])
+        return FakeProcess(ok)
+    monkeypatch.setattr(agent, "_start_process", start)
+    events = [e async for e in agent.chat(history, model="gemini-3.8-flash-high", resume={"id": "conv-1", "synced": 2})]
+    assert len(attempts) == 2 and "--conversation" not in attempts[1]
+    assert "[User]\nhello" in attempts[1][attempts[1].index("--print") + 1]
+    assert any(isinstance(e, NativeActivity) and "unavailable" in e.description for e in events)
+    assert events[-1].native_session == {"id": "conv-1"}

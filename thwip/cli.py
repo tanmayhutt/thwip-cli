@@ -258,6 +258,14 @@ class ThwipCLI:
                 break
             except Exception as e:
                 print_error(f"Unexpected error: {e}")
+        await self._close_native_agents()
+
+    async def _close_native_agents(self) -> None:
+        for agent in self.registry.list_agents():
+            closer = getattr(agent, "close", None)
+            if callable(closer):
+                with contextlib.suppress(Exception):
+                    await closer()
 
     async def _ask_text(self, question: str) -> str:
         """Ask a one-line question without blocking the event loop.
@@ -1145,6 +1153,11 @@ class ThwipCLI:
         if getattr(self.current_agent, "native_tools", False):
             content.append("Connection:  Existing CLI sign-in; billing and tool accounting managed by native CLI\n", style="dim")
             content.append(f"Usage:       {describe_limit_windows(getattr(self.current_agent, 'limit_windows', []))}\n", style="dim")
+            record = self.session.native_session(self.current_agent.name)
+            if record:
+                content.append(f"CLI session: {record['id']} (has seen {record['synced']} messages; only new ones are sent)\n", style="dim")
+            else:
+                content.append("CLI session: none yet; the first message sends the full conversation\n", style="dim")
         content.append(f"Config Key:  {self.config.key_sources.get(self.current_agent.name, 'None')}\n", style="dim")
 
         console.print(Panel(content, title="Current Status", box=box.ROUNDED))
@@ -1231,10 +1244,11 @@ class ThwipCLI:
             p = Path(new_path).expanduser().resolve()
             if p.is_dir():
                 self.session.project_path = str(p)
+                self.session.native_sessions.clear()
                 self.tool_manager = ToolManager(str(p))
                 self.config.project = str(p)
                 self.config.save()
-                print_success(f"Project path changed to {p}")
+                print_success(f"Project path changed to {p}. Native CLI sessions will start fresh here.")
             else:
                 print_error(f"Directory '{new_path}' does not exist.")
         else:
@@ -1338,6 +1352,7 @@ class ThwipCLI:
         collected_text = ""
         total_tokens = 0
         limit_hit = False
+        native_session_id = ""
         if hasattr(self.current_agent, "get_handoff_models"):
             report = build_handoff_report(self.session, self.current_agent, self.current_agent,
                                           self.session.current_model, tools)
@@ -1356,13 +1371,12 @@ class ThwipCLI:
 
             with Live(console=console, refresh_per_second=12) as live:
                 try:
-                    response_stream = self.current_agent.chat(
-                        messages=working_messages,
-                        model=self.session.current_model,
-                        system_prompt=self.session.system_prompt,
-                        tools=tools,
-                        stream=self.config.stream if tools is None else False,
-                    )
+                    chat_kwargs = {"messages": working_messages, "model": self.session.current_model,
+                                   "system_prompt": self.session.system_prompt, "tools": tools,
+                                   "stream": self.config.stream if tools is None else False}
+                    if native:
+                        chat_kwargs["resume"] = self.session.native_session(self.current_agent.name)
+                    response_stream = self.current_agent.chat(**chat_kwargs)
                     # Close the adapter generator deterministically on interruption so child processes stop.
                     closer = contextlib.aclosing(response_stream) if hasattr(response_stream, "aclose") else contextlib.nullcontext(response_stream)
                     async with closer as response_stream:
@@ -1393,6 +1407,7 @@ class ThwipCLI:
                                 live.start()
                             elif isinstance(event, AgentDone):
                                 native_state = event.native_state
+                                native_session_id = str(event.native_session.get("id") or "") or native_session_id
                                 used = event.usage.input_tokens + event.usage.output_tokens
                                 total_tokens += used
                                 self.usage_tracker.record_usage(
@@ -1478,6 +1493,9 @@ class ThwipCLI:
                 company=self.current_agent.company,
                 tokens=total_tokens,
             )
+            if native and native_session_id:
+                # The native session now holds every portable message; next turn sends only what is new.
+                self.session.set_native_session(self.current_agent.name, native_session_id, self.session.current_model)
             if getattr(self.config, "auto_save", False):
                 if self.session.name == "new-session":
                     self.session.name = f"session-{self.session.id}"
@@ -1549,6 +1567,35 @@ class ThwipCLI:
                     break
 
 
+MAN_PAGE = Path(__file__).parent / "data" / "thwip.1"
+
+
+def run_man_command(command: str) -> int:
+    """Show or install the bundled manual page. pip cannot install man pages, so thwip does it on request."""
+    import subprocess
+
+    if not MAN_PAGE.is_file():
+        print("The manual page is missing from this installation.", file=sys.stderr)
+        return 1
+    if command == "man":
+        if shutil.which("man"):
+            return subprocess.call(["man", "-l", str(MAN_PAGE)])
+        print(MAN_PAGE.read_text(encoding="utf-8"))
+        return 0
+    target_dir = Path(os.environ.get("THWIP_MAN_DIR") or Path.home() / ".local" / "share" / "man" / "man1")
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / "thwip.1"
+        target.write_text(MAN_PAGE.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError as exc:
+        print(f"Could not install the manual page: {exc}", file=sys.stderr)
+        return 1
+    print(f"Installed {target}")
+    print("Run `man thwip`. If it is not found, add this to your shell profile:")
+    print(f'  export MANPATH="{target_dir.parent}:$MANPATH"')
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the thwip CLI command."""
     import argparse
@@ -1562,7 +1609,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--version", action="version", version=f"thwip {__version__}")
     parser.add_argument("-p", "--project", metavar="PATH",
                         help="Project directory for this session (defaults to the saved project or the current directory).")
+    parser.add_argument("command", nargs="?", choices=["man", "install-man"],
+                        help="'man' shows the manual page; 'install-man' installs it so that `man thwip` works.")
     args = parser.parse_args(argv)
+    if args.command:
+        raise SystemExit(run_man_command(args.command))
     project = None
     if args.project:
         candidate = Path(args.project).expanduser()
