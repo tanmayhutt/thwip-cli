@@ -1,4 +1,4 @@
-"""Native Codex and Gemini integrations using their supported stdio protocols."""
+"""Native Codex integration over the Codex App Server JSON-RPC protocol."""
 
 from __future__ import annotations
 
@@ -57,10 +57,12 @@ class NativeAgent(BaseAgent):
                     Capability.CODE_RUN, Capability.TERMINAL, Capability.GIT}
 
     def __init__(self, provider: str, project: str):
+        if provider != "openai":
+            raise ValueError("NativeAgent supports the Codex CLI only; Google uses the Antigravity CLI print adapter.")
         self.name = provider
-        self.binary = "codex" if provider == "openai" else "gemini"
-        self.company = "OpenAI" if provider == "openai" else "Google"
-        self.display_name = "Codex CLI" if provider == "openai" else "Gemini CLI"
+        self.binary = "codex"
+        self.company = "OpenAI"
+        self.display_name = "Codex CLI"
         self.project = str(Path(project).expanduser().resolve())
         self.available_models = []
         self.ready = False
@@ -93,24 +95,22 @@ class NativeAgent(BaseAgent):
 
     def get_model_info(self, model_id):
         known = super().get_model_info(model_id)
-        # Explicit IDs are resolved by the native provider, never rejected by a bundled catalog.
-        if known or not model_id or not isinstance(model_id, str) or any(c.isspace() for c in model_id):
+        if known or self.ready:
+            # Once the CLI has reported its list, only listed IDs are accepted.
             return known
+        if not model_id or not isinstance(model_id, str) or any(c.isspace() for c in model_id):
+            return None
         return ModelInfo(id=model_id, name=model_id)
 
     async def _connect(self):
         executable = shutil.which(self.binary)
         if not executable:
             raise RuntimeError(f"{self.display_name} is no longer installed.")
-        command = [executable, "app-server"] if self.name == "openai" else [executable, "--acp", "--approval-mode", "default"]
+        command = [executable, "app-server"]
         rpc = await NativeRPC(command, self.project).start()
         try:
-            if self.name == "openai":
-                await rpc.request("initialize", {"clientInfo": {"name": "thwip", "version": __version__}})
-                await rpc.send({"method": "initialized", "params": {}})
-            else:
-                await rpc.request("initialize", {"protocolVersion": 1, "clientCapabilities": {},
-                                                 "clientInfo": {"name": "thwip", "version": __version__}})
+            await rpc.request("initialize", {"clientInfo": {"name": "thwip", "version": __version__}})
+            await rpc.send({"method": "initialized", "params": {}})
             return rpc
         except BaseException:
             await rpc.close()
@@ -121,26 +121,19 @@ class NativeAgent(BaseAgent):
         try:
             rpc = await self._connect()
             models = []
-            if self.name == "openai":
-                auth = await rpc.request("account/read", {"refreshToken": False})
-                if not auth.get("account") and auth.get("requiresOpenaiAuth", True):
-                    raise RuntimeError("Codex has no active sign-in. Open codex to restore its login.")
-                cursor = None
-                for _ in range(20):
-                    page = await rpc.request("model/list", {"limit": 100, "cursor": cursor})
-                    for item in page.get("data", []):
-                        models.append(ModelInfo(id=item["model"], name=item.get("displayName", item["model"]),
-                                                is_default=item.get("isDefault", False),
-                                                supports_thinking=bool(item.get("supportedReasoningEfforts"))))
-                    cursor = page.get("nextCursor")
-                    if not cursor:
-                        break
-            else:
-                session = await rpc.request("session/new", {"cwd": self.project, "mcpServers": []}, timeout=45)
-                info = session.get("models", {})
-                for item in info.get("availableModels", []):
-                    models.append(ModelInfo(id=item["modelId"], name=item.get("name", item["modelId"]),
-                                            is_default=item["modelId"] == info.get("currentModelId")))
+            auth = await rpc.request("account/read", {"refreshToken": False})
+            if not auth.get("account") and auth.get("requiresOpenaiAuth", True):
+                raise RuntimeError("Codex has no active sign-in. Open codex to restore its login.")
+            cursor = None
+            for _ in range(20):
+                page = await rpc.request("model/list", {"limit": 100, "cursor": cursor})
+                for item in page.get("data", []):
+                    models.append(ModelInfo(id=item["model"], name=item.get("displayName", item["model"]),
+                                            is_default=item.get("isDefault", False),
+                                            supports_thinking=bool(item.get("supportedReasoningEfforts"))))
+                cursor = page.get("nextCursor")
+                if not cursor:
+                    break
             if not models:
                 raise RuntimeError("The installed CLI returned no selectable models.")
             self.available_models = list({model.id: model for model in models}.values())
@@ -155,46 +148,29 @@ class NativeAgent(BaseAgent):
 
     async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True):
         rpc = await self._connect()
-        prompt_task = None
         event_task = None
         try:
             # A fresh native session receives only portable text; tool state stays native within the turn.
-            prompt = build_native_prompt(messages, None if self.name == "openai" else system_prompt)
-            if self.name == "openai":
-                # Codex App Server sandbox modes are kebab-case; camelCase is rejected as an invalid request.
-                session = await rpc.request("thread/start", {
-                    "cwd": self.project, "model": model or self.get_default_model(), "sandbox": "read-only",
-                    "approvalPolicy": "on-request", "ephemeral": True,
-                    **({"developerInstructions": system_prompt} if system_prompt else {}),
-                })
-                thread_id = session["thread"]["id"]
-                await rpc.request("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}]})
-            else:
-                session = await rpc.request("session/new", {"cwd": self.project, "mcpServers": []}, timeout=45)
-                session_id = session["sessionId"]
-                await rpc.request("session/set_model", {"sessionId": session_id, "modelId": model or self.get_default_model()})
-                prompt_task = asyncio.create_task(rpc.request("session/prompt", {
-                    "sessionId": session_id, "prompt": [{"type": "text", "text": prompt}]}, timeout=600))
+            prompt = build_native_prompt(messages, None)
+            # Codex App Server sandbox modes are kebab-case; camelCase is rejected as an invalid request.
+            session = await rpc.request("thread/start", {
+                "cwd": self.project, "model": model or self.get_default_model(), "sandbox": "read-only",
+                "approvalPolicy": "on-request", "ephemeral": True,
+                **({"developerInstructions": system_prompt} if system_prompt else {}),
+            })
+            thread_id = session["thread"]["id"]
+            await rpc.request("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}]})
             usage = TokenUsage()
             started_items = {}
             text_items = set()
             while True:
-                if prompt_task and prompt_task.done() and rpc.events.empty():
-                    result = prompt_task.result()
-                    if result.get("stopReason") not in {"end_turn", "max_tokens"}:
-                        raise RuntimeError("Gemini stopped before completing the response.")
-                    yield AgentDone(usage=usage)
-                    return
                 event_task = asyncio.create_task(rpc.events.get())
-                waiting = [event_task] + ([prompt_task] if prompt_task and not prompt_task.done() else [])
-                done, _ = await asyncio.wait(waiting, timeout=600, return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait([event_task], timeout=600)
                 if not done:
-                    raise TimeoutError("Native agent response timed out.")
-                if event_task not in done:
                     event_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await event_task
-                    continue
+                    raise TimeoutError("Native agent response timed out.")
                 event = event_task.result()
                 method, params = event.get("method", ""), event.get("params", {})
                 if method == "_closed":
@@ -205,13 +181,6 @@ class NativeAgent(BaseAgent):
                         permission = NativePermission(describe_permission(details, "Codex"))
                         yield permission
                         await rpc.send({"id": event["id"], "result": {"decision": "accept" if permission.approved else "decline"}})
-                    elif method == "session/request_permission":
-                        permission = NativePermission(describe_permission(params.get("toolCall", {}), "Gemini"))
-                        yield permission
-                        kind = "allow_once" if permission.approved else "reject_once"
-                        option = next((o for o in params.get("options", []) if o.get("kind") == kind), None)
-                        outcome = {"outcome": "selected", "optionId": option["optionId"]} if option else {"outcome": "cancelled"}
-                        await rpc.send({"id": event["id"], "result": {"outcome": outcome}})
                     else:
                         await rpc.send({"id": event["id"], "error": {"code": -32601, "message": "Unsupported client request"}})
                     continue
@@ -272,10 +241,9 @@ class NativeAgent(BaseAgent):
                     elif kind in {"tool_call", "tool_call_update"}:
                         yield NativeActivity(description=update.get("title", "Native tool activity"))
         finally:
-            for task in (prompt_task, event_task):
-                if task and not task.done():
-                    task.cancel()
-                if task:
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await task
+            if event_task and not event_task.done():
+                event_task.cancel()
+            if event_task:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await event_task
             await rpc.close()

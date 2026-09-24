@@ -82,8 +82,8 @@ class AgentRegistry:
         """Use installed, signed-in CLIs for providers without a direct API key.
 
         Codex uses its App Server protocol. Claude Code and the Antigravity CLI
-        use their stream-json print modes. A real Gemini CLI falls back to ACP.
-        A configured direct API key always takes precedence.
+        use their stream-json print modes. A configured direct API key always
+        takes precedence over the native connection.
         """
         natives = []
         for name in ("openai", "claude", "google"):
@@ -116,12 +116,10 @@ class AgentRegistry:
         from thwip.agents.native_print import PrintAgent
 
         if name == "openai":
-            candidates = [NativeAgent("openai", project)]
-        elif name == "claude":
-            candidates = [PrintAgent("claude", project)]
+            candidate = NativeAgent("openai", project)
         else:
-            candidates = [PrintAgent("google", project), NativeAgent("google", project)]
-        return next((candidate for candidate in candidates if candidate.is_installed()), None)
+            candidate = PrintAgent(name, project)  # Claude Code, or the Antigravity CLI for Google
+        return candidate if candidate.is_installed() else None
 
     def list_agents(self) -> list[BaseAgent]:
         """Return all instantiated agents."""

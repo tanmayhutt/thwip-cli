@@ -47,7 +47,7 @@ KNOWN_CLI_TOOLS: list[dict[str, Any]] = [
         "config_files": ["~/.claude.json", "~/.claude/config.json"],
     },
     {
-        "name": "Antigravity / Gemini CLI",
+        "name": "Antigravity CLI",
         "company": "Google",
         "binaries": ["agy", "gemini", "antigravity"],
         "category": "CLI Agent",

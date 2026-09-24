@@ -103,10 +103,13 @@ class PrintAgent(BaseAgent):
 
     def get_model_info(self, model_id):
         known = super().get_model_info(model_id)
-        # Explicit IDs are validated by the CLI itself rather than a bundled catalog.
         if known or not model_id or not isinstance(model_id, str) or any(c.isspace() for c in model_id):
             return known
-        return ModelInfo(id=model_id, name=model_id, tier=_tier_for(model_id))
+        # Antigravity reports a live list, so only listed IDs are accepted. Claude Code has no list
+        # endpoint: besides the aliases, accept full model names it documents (claude-...).
+        if self.name == "claude" and model_id.startswith("claude-"):
+            return ModelInfo(id=model_id, name=model_id, tier=_tier_for(model_id))
+        return None
 
     # --- Process plumbing ---
 

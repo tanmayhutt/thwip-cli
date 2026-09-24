@@ -30,6 +30,7 @@ from thwip.agents.base import (
     TokenUsage,
     ToolUseStart,
 )
+from thwip.endpoints import base_url
 
 
 class ClaudeAgent(BaseAgent):
@@ -156,7 +157,7 @@ class ClaudeAgent(BaseAgent):
                 )
             try:
                 import anthropic
-                self._client = anthropic.AsyncAnthropic(api_key=key)
+                self._client = anthropic.AsyncAnthropic(api_key=key, base_url=base_url("claude"))
             except ImportError:
                 raise RuntimeError(
                     "anthropic package not installed. Run: pip install anthropic"

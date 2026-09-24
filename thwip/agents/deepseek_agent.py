@@ -28,6 +28,7 @@ from thwip.agents.base import (
     ToolUseStart,
 )
 from thwip.agents.chat_messages import serialize_chat_messages
+from thwip.endpoints import base_url
 
 
 class DeepSeekAgent(BaseAgent):
@@ -112,7 +113,7 @@ class DeepSeekAgent(BaseAgent):
                 from openai import AsyncOpenAI
                 self._client = AsyncOpenAI(
                     api_key=key,
-                    base_url="https://api.deepseek.com",
+                    base_url=base_url("deepseek"),
                 )
             except ImportError:
                 raise RuntimeError("openai package required for DeepSeek adapter.")

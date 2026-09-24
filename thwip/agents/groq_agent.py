@@ -27,6 +27,7 @@ from thwip.agents.base import (
     ToolUseStart,
 )
 from thwip.agents.chat_messages import serialize_chat_messages
+from thwip.endpoints import base_url
 
 
 class GroqAgent(BaseAgent):
@@ -99,7 +100,7 @@ class GroqAgent(BaseAgent):
                 from openai import AsyncOpenAI
                 self._client = AsyncOpenAI(
                     api_key=key,
-                    base_url="https://api.groq.com/openai/v1",
+                    base_url=base_url("groq"),
                 )
             except ImportError:
                 raise RuntimeError("openai package required for Groq adapter.")

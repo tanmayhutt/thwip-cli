@@ -29,6 +29,7 @@ from thwip.agents.base import (
     TokenUsage,
     ToolUseStart,
 )
+from thwip.endpoints import base_url
 
 
 class OpenAIAgent(BaseAgent):
@@ -138,7 +139,7 @@ class OpenAIAgent(BaseAgent):
                 )
             try:
                 from openai import AsyncOpenAI
-                self._client = AsyncOpenAI(api_key=key)
+                self._client = AsyncOpenAI(api_key=key, base_url=base_url("openai"))
             except ImportError:
                 raise RuntimeError(
                     "openai package not installed. Run: pip install openai"

@@ -8,7 +8,7 @@
 
 ## Features
 
-- **Auto-Detection**: Discovers installed AI coding agents (Claude Code, Antigravity, Gemini CLI, OpenAI/Codex, Aider, Copilot, Cursor, Windsurf, Cline, Ollama) and configured credentials.
+- **Auto-Detection**: Discovers installed AI coding agents (Claude Code, Antigravity CLI, OpenAI/Codex, Aider, Copilot, Cursor, Windsurf, Cline, Ollama) and configured credentials.
 - **Existing Sign-ins**: Chats through installed Codex, Claude Code, and Antigravity CLIs using their own logins and live model lists, with no API key required.
 - **Context Portability**: Switch providers with stored conversational text. Working files remain in the selected local project; they are not automatically uploaded.
 - **Handoff Preview**: Inspect text continuity, omitted state, capability changes, approximate context pressure, and a text fingerprint before switching. Runs locally without model calls.
@@ -98,7 +98,7 @@ API key for the same provider always takes precedence over the native connection
 |:---|:---|:---|:---|
 | OpenAI | `codex` | Codex App Server (JSON-RPC over stdio) | Live from `model/list` |
 | Anthropic | `claude` | Claude Code print mode (`stream-json`) | Aliases `fable`, `opus`, `sonnet`, `haiku`; explicit IDs pass through |
-| Google | `agy` (Antigravity CLI) or `gemini` | Antigravity print mode (`stream-json`) or Gemini ACP | Live from `agy models` or the ACP session |
+| Google | `agy` (Antigravity CLI) | Antigravity print mode (`stream-json`) | Live from `agy models` |
 
 `/models` refreshes the catalog supplied by each CLI. An explicit model ID that is
 not in the catalog is passed to the CLI for validation instead of being rejected by
@@ -130,13 +130,34 @@ Thwip to resume.
 
 Model lists are not hardcoded. Each connected source supplies its own list:
 
-- Installed CLIs report their models (Codex `model/list`, `agy models`, Claude Code aliases).
+- Installed CLIs report their models (Codex `model/list`, `agy models`, Claude Code aliases). An ID the CLI does not list is rejected; Claude Code additionally accepts full `claude-...` names because it has no list endpoint.
 - Direct providers with a key are queried through their list-models endpoint (OpenAI,
   Anthropic, Google, DeepSeek, Groq, OpenRouter) at startup, on `/models`, and right
   after `/key`. Non-chat models (embeddings, speech, image, moderation) are filtered
   out. Context sizes and prices are taken from the provider when it publishes them.
 - A small bundled list per provider remains only as an offline fallback and is labelled
   "bundled fallback" in `/models` until a key or connection is available.
+
+## Endpoint overrides
+
+Any direct adapter can be pointed at a different server: a proxy, a self-hosted
+gateway, a local test double, or an OpenAI-compatible service. Set an environment
+variable or an `[endpoints]` table in `~/.thwip/config.toml`. Keys stay provider keys.
+
+```bash
+export THWIP_OPENAI_BASE_URL=https://gateway.example/v1      # also DEEPSEEK, GROQ, OPENROUTER
+export THWIP_ANTHROPIC_BASE_URL=https://gateway.example
+export THWIP_GOOGLE_BASE_URL=https://gateway.example
+```
+
+```toml
+[endpoints]
+openai = "https://gateway.example/v1"
+```
+
+The repository uses this to run every direct adapter end to end against a local fake
+provider in `tests/fake_providers.py`, so streaming, tool rounds, live catalogs, and
+HTTP 429 handling are verified through the real SDKs without spending on real keys.
 
 ## Usage-limit failover
 
@@ -186,7 +207,7 @@ See [research and prior art](docs/handoff-research.md) for the differentiation r
 | Company | Agent | Capabilities |
 |:---|:---|:---|
 | Anthropic | Claude Code sign-in, or Claude API (Fable 5, Opus 5, Sonnet 5, Haiku 4.5) | Chat, File Edit, Code Run, Terminal, Git |
-| Google | Antigravity or Gemini CLI sign-in, or Gemini API (3.1 Pro Preview, 3.7 Flash, 3.5 Flash-Lite) | Chat, File Edit, Code Run, Terminal, Git |
+| Google | Antigravity CLI sign-in, or Gemini API key | Chat, File Edit, Code Run, Terminal, Git |
 | OpenAI | Codex CLI sign-in, or OpenAI API (GPT-5.6 Sol, Terra, Luna) | Chat, File Edit, Code Run, Terminal, Git |
 | DeepSeek | DeepSeek V3 / R1 Reasoner | Chat, File Edit, Code Run, Reasoning |
 | Groq | GPT-OSS 120B (default); Llama 3.3 for eligible enterprise accounts only | Chat, File Edit, Code Run |
