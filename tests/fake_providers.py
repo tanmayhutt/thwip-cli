@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 REPLY = "fake reply from local provider"
 CHAT_MODELS = ["gpt-fake-chat", "gpt-fake-limited"]
 GEMINI_MODELS = ["gemini-fake-chat", "gemini-fake-limited"]
+OLLAMA_MODELS = ["fake-local:latest", "fake-broken:latest"]
 
 
 def _wants_tool(body: dict) -> bool:
@@ -76,6 +77,8 @@ class Handler(BaseHTTPRequestHandler):
                  "inputTokenLimit": 32000, "outputTokenLimit": 8000} for m in GEMINI_MODELS]})
         if path.endswith("/models"):
             return self._json(200, {"data": [{"id": m, "display_name": m, "context_window": 32000} for m in CHAT_MODELS]})
+        if path.endswith("/api/tags"):
+            return self._json(200, {"models": [{"name": m, "model": m, "size": 1, "details": {"parameter_size": "1B"}} for m in OLLAMA_MODELS]})
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -86,6 +89,8 @@ class Handler(BaseHTTPRequestHandler):
         if _is_limited(body, path):
             return self._json(429, {"error": {"message": "Rate limit reached for model; quota exhausted", "type": "rate_limit_error"}},
                               {"retry-after": "0"})
+        if path.endswith("/api/chat"):
+            return self._ollama(body)
         if path.endswith("/chat/completions"):
             return self._chat_completions(body)
         if path.endswith("/responses"):
@@ -129,6 +134,28 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(200, {"id": "resp_1", "object": "response", "created_at": 1, "model": body["model"], "status": "completed",
                                 "output": output, "usage": {"input_tokens": 11, "output_tokens": 5, "total_tokens": 16},
                                 "parallel_tool_calls": True, "tool_choice": "auto", "tools": []})
+
+    # --- Ollama ---
+    def _ollama(self, body):
+        if "broken" in str(body.get("model", "")):
+            return self._json(500, {"error": "model runner crashed"})
+        if _wants_tool(body):
+            message = {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "read_file", "arguments": {"file_path": "note.txt"}}}]}
+        else:
+            message = {"role": "assistant", "content": REPLY}
+        final = {"model": body["model"], "message": message, "done": True, "prompt_eval_count": 11, "eval_count": 5}
+        if body.get("stream", True):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            if not _wants_tool(body):
+                for piece in ["fake reply ", "from local provider"]:
+                    self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": piece}, "done": False}) + "\n").encode())
+                final["message"] = {"role": "assistant", "content": ""}
+            self.wfile.write((json.dumps(final) + "\n").encode())
+            self.wfile.flush()
+            return None
+        return self._json(200, final)
 
     # --- Anthropic ---
     def _anthropic(self, body):

@@ -64,34 +64,34 @@ class OllamaAgent(BaseAgent):
         # Try to query running Ollama server for downloaded models
         models = []
         try:
-            req = urllib.request.Request(f"{self.host}/api/tags")
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                for m in data.get("models", []):
-                    name = m.get("name", "")
-                    models.append(
-                        ModelInfo(
-                            id=name,
-                            name=f"{name} (Local)",
-                            context_window=32_768,
-                            max_output=8_192,
-                            supports_tools=True,
-                            supports_streaming=True,
-                            pricing_input=0.0,
-                            pricing_output=0.0,
-                        )
-                    )
+              req = urllib.request.Request(f"{self.host}/api/tags")
+              with urllib.request.urlopen(req, timeout=1.5) as resp:
+                  data = json.loads(resp.read().decode("utf-8"))
+                  for m in data.get("models", []):
+                      name = m.get("name", "")
+                      models.append(
+                          ModelInfo(
+                              id=name,
+                              name=f"{name} (Local)",
+                              context_window=32_768,
+                              max_output=8_192,
+                              supports_tools=True,
+                              supports_streaming=True,
+                              pricing_input=0.0,
+                              pricing_output=0.0,
+                          )
+                      )
         except Exception:
-            pass
+              pass
 
         if not models:
-            # Defaults
-            models = [
-                ModelInfo(id="llama3.3", name="Llama 3.3", is_default=True),
-                ModelInfo(id="qwen2.5-coder", name="Qwen 2.5 Coder"),
-                ModelInfo(id="deepseek-r1", name="DeepSeek R1 Distill"),
-                ModelInfo(id="codellama", name="CodeLlama"),
-            ]
+              # Defaults
+              models = [
+                  ModelInfo(id="llama3.3", name="Llama 3.3", is_default=True),
+                  ModelInfo(id="qwen2.5-coder", name="Qwen 2.5 Coder"),
+                  ModelInfo(id="deepseek-r1", name="DeepSeek R1 Distill"),
+                  ModelInfo(id="codellama", name="CodeLlama"),
+              ]
         self._cached_models = models
         return models
 
@@ -101,21 +101,21 @@ class OllamaAgent(BaseAgent):
     def get_handoff_models(self) -> list[ModelInfo]:
         """Never query even a remote configured Ollama host during a preview."""
         if self._cached_models is not None:
-            return list(self._cached_models)
+              return list(self._cached_models)
         return [
-            ModelInfo(id="llama3.3", name="Llama 3.3", is_default=True),
-            ModelInfo(id="qwen2.5-coder", name="Qwen 2.5 Coder"),
-            ModelInfo(id="deepseek-r1", name="DeepSeek R1 Distill"),
-            ModelInfo(id="codellama", name="CodeLlama"),
+              ModelInfo(id="llama3.3", name="Llama 3.3", is_default=True),
+              ModelInfo(id="qwen2.5-coder", name="Qwen 2.5 Coder"),
+              ModelInfo(id="deepseek-r1", name="DeepSeek R1 Distill"),
+              ModelInfo(id="codellama", name="CodeLlama"),
         ]
 
     def _is_server_reachable(self) -> bool:
         try:
-            req = urllib.request.Request(f"{self.host}/api/tags")
-            with urllib.request.urlopen(req, timeout=1.0) as resp:
-                return resp.status == 200
+              req = urllib.request.Request(f"{self.host}/api/tags")
+              with urllib.request.urlopen(req, timeout=1.0) as resp:
+                  return resp.status == 200
         except Exception:
-            return False
+              return False
 
     def is_configured(self) -> bool:
         return self._is_server_reachable()
@@ -123,16 +123,16 @@ class OllamaAgent(BaseAgent):
     def get_install_info(self) -> dict[str, str]:
         path = shutil.which("ollama") or ""
         return {
-            "method": "CLI / Local Daemon" if path else "Local Server",
-            "path": path or self.host,
-            "version": "Local",
+              "method": "CLI / Local Daemon" if path else "Local Server",
+              "path": path or self.host,
+              "version": "Local",
         }
 
     def get_subscription_info(self) -> SubscriptionInfo:
         return SubscriptionInfo(
-            tier=SubscriptionTier.UNLIMITED,
-            is_active=self.is_configured(),
-            message="Unlimited offline local compute",
+              tier=SubscriptionTier.UNLIMITED,
+              is_active=self.is_configured(),
+              message="Unlimited offline local compute",
         )
 
     async def chat(
@@ -146,55 +146,57 @@ class OllamaAgent(BaseAgent):
         model = model or self.get_default_model()
         formatted_messages = []
         if system_prompt:
-            formatted_messages.append({"role": "system", "content": system_prompt})
+              formatted_messages.append({"role": "system", "content": system_prompt})
         formatted_messages.extend(messages)
 
         payload: dict[str, Any] = {
-            "model": model,
-            "messages": formatted_messages,
-            "stream": stream,
+              "model": model,
+              "messages": formatted_messages,
+              "stream": stream,
         }
         if tools:
-            payload["tools"] = tools
+              payload["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            if stream:
-                async with client.stream(
-                    "POST", f"{self.host}/api/chat", json=payload
-                ) as resp:
-                    if resp.status_code != 200:
-                        yield AgentDone()
-                        return
-                    async for line in resp.aiter_lines():
-                        if not line:
-                            continue
-                        try:
-                            data = json.loads(line)
-                            msg = data.get("message", {})
-                            content = msg.get("content", "")
-                            if content:
-                                yield TextDelta(content=content)
-                            for call in msg.get("tool_calls", []):
-                                function = call.get("function", {})
-                                yield ToolUseStart(
-                                    tool_id=call.get("id", function.get("name", "tool")),
-                                    tool_name=function.get("name", ""),
-                                    args=function.get("arguments", {}),
-                                )
-                            if data.get("done"):
-                                prompt_eval = data.get("prompt_eval_count", 0)
-                                eval_count = data.get("eval_count", 0)
-                                yield AgentDone(
-                                    usage=TokenUsage(
-                                        input_tokens=prompt_eval,
-                                        output_tokens=eval_count,
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                if stream:
+                    async with client.stream(
+                        "POST", f"{self.host}/api/chat", json=payload
+                    ) as resp:
+                        if resp.status_code != 200:
+                            body = (await resp.aread()).decode("utf-8", "replace")[:200]
+                            raise RuntimeError(f"Ollama returned HTTP {resp.status_code} for {model}: {body or 'no details'}")
+                        async for line in resp.aiter_lines():
+                            if not line:
+                                continue
+                            try:
+                                data = json.loads(line)
+                                msg = data.get("message", {})
+                                content = msg.get("content", "")
+                                if content:
+                                    yield TextDelta(content=content)
+                                for call in msg.get("tool_calls", []):
+                                    function = call.get("function", {})
+                                    yield ToolUseStart(
+                                        tool_id=call.get("id", function.get("name", "tool")),
+                                        tool_name=function.get("name", ""),
+                                        args=function.get("arguments", {}),
                                     )
-                                )
-                        except json.JSONDecodeError:
-                            continue
-            else:
-                resp = await client.post(f"{self.host}/api/chat", json=payload)
-                if resp.status_code == 200:
+                                if data.get("done"):
+                                    prompt_eval = data.get("prompt_eval_count", 0)
+                                    eval_count = data.get("eval_count", 0)
+                                    yield AgentDone(
+                                        usage=TokenUsage(
+                                            input_tokens=prompt_eval,
+                                            output_tokens=eval_count,
+                                        )
+                                    )
+                            except json.JSONDecodeError:
+                                continue
+                else:
+                    resp = await client.post(f"{self.host}/api/chat", json=payload)
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"Ollama returned HTTP {resp.status_code} for {model}: {resp.text[:200] or 'no details'}")
                     data = resp.json()
                     message = data.get("message", {})
                     if message.get("content"):
@@ -206,7 +208,11 @@ class OllamaAgent(BaseAgent):
                             tool_name=function.get("name", ""),
                             args=function.get("arguments", {}),
                         )
-                    yield AgentDone()
+                    yield AgentDone(usage=TokenUsage(input_tokens=data.get("prompt_eval_count", 0) or 0,
+                                                     output_tokens=data.get("eval_count", 0) or 0))
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Ollama server at {self.host} is unreachable: {type(exc).__name__}. "
+                               "Start it with `ollama serve` or /switch to another agent.") from exc
 
     def check_limits(self) -> LimitStatus:
         return LimitStatus.OK if self.is_configured() else LimitStatus.NO_KEY

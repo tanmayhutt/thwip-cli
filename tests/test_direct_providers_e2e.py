@@ -97,7 +97,7 @@ async def test_http_429_becomes_limit_hit(agent):
 
 
 def test_default_urls_are_used_without_override(monkeypatch):
-    for provider, env in ENV.items():
+    for env in ENV.values():
         monkeypatch.delenv(env, raising=False)
     from thwip import endpoints
     endpoints.configure({})
@@ -105,3 +105,30 @@ def test_default_urls_are_used_without_override(monkeypatch):
     endpoints.configure({"openai": "https://proxy.example/v1/"})
     assert base_url("openai") == "https://proxy.example/v1" and is_overridden("openai")
     endpoints.configure({})
+
+
+@pytest.fixture
+def ollama(fake):
+    from thwip.agents.ollama_agent import OllamaAgent
+    return OllamaAgent(host=fake.url)
+
+
+def test_ollama_lists_models_from_server(ollama):
+    assert ollama.is_configured()
+    assert [m.id for m in ollama.available_models] == ["fake-local:latest", "fake-broken:latest"]
+
+
+@pytest.mark.asyncio
+async def test_ollama_stream_tool_round_and_errors(ollama):
+    events = await run(ollama, messages=[{"role": "user", "content": "hello"}], model="fake-local:latest", stream=True)
+    assert "".join(e.content for e in events if isinstance(e, TextDelta)) == REPLY
+    assert isinstance(events[-1], AgentDone) and events[-1].usage.input_tokens == 11
+    events = await run(ollama, messages=[{"role": "user", "content": "Please read the file note.txt"}], model="fake-local:latest",
+                       tools=TOOLS, stream=False)
+    calls = [e for e in events if isinstance(e, ToolUseStart)]
+    assert calls and calls[0].tool_name == "read_file" and calls[0].args == {"file_path": "note.txt"}
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        await run(ollama, messages=[{"role": "user", "content": "hello"}], model="fake-broken:latest", stream=True)
+    from thwip.agents.ollama_agent import OllamaAgent
+    with pytest.raises(RuntimeError, match="unreachable"):
+        await run(OllamaAgent(host="http://127.0.0.1:9"), messages=[{"role": "user", "content": "hello"}], model="x", stream=True)
