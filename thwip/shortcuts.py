@@ -74,10 +74,6 @@ def create_keybindings(on_switch=None, on_status=None, on_history=None) -> KeyBi
         event.app.current_buffer.text = "/status"
         event.app.current_buffer.validate_and_handle()
 
-    @kb.add("c-h")
-    def _history(event):
-        """Ctrl+H: Show history."""
-        event.app.current_buffer.text = "/history"
-        event.app.current_buffer.validate_and_handle()
+    # Ctrl+H is the Backspace key in terminals, so it must never be bound to a command.
 
     return kb

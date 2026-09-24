@@ -1,6 +1,6 @@
 # Verification status
 
-Verified locally on 2026-09-24 for v1.5.0. The Python suite
+Verified locally on 2026-09-24 for v1.5.1. The Python suite
 passes 240 offline tests. Exhaustive behavior across every provider and
 configuration has not been established.
 
@@ -19,6 +19,7 @@ each using its existing sign-in. No API keys were configured.
 | Ctrl+C during a response | Turn cancelled, child process terminated, REPL continued, unanswered message removed |
 | Ctrl+C at a Codex permission prompt | Turn cancelled, no file created, no leftover process, REPL continued |
 | Usage-limit failover | With a test-only shim making Codex report "You've hit your usage limit", the real REPL showed the alternatives, switched to Claude Code on `1`, retried the message, and answered; history held one clean pair |
+| Full command sweep (v1.5.1) | Every slash command with invalid arguments, native launcher decline, key picker cancel, Ctrl+T, Ctrl+C inside pickers and confirmations, Backspace editing; found and fixed Backspace triggering `/history` via the Ctrl+H binding |
 | Parity commands | Live REPL run: `!git log`, `/model` picker, `@file` mention answered by Codex, `/compact` summary, `/export`, `/copy`, `/diff`, `/new`, `/resume`, `/usage` |
 | Live catalogs | OpenRouter public list fetched live (459 models with context and pricing); other providers covered by recorded-payload tests because no keys are present here |
 | `/session save` and `/session load` | Session with a native provider saved and reloaded in a fresh run |

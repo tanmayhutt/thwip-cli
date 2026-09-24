@@ -16,7 +16,9 @@ def launcher(tmp_path, monkeypatch):
     monkeypatch.setattr("thwip.cli.shutil.which", lambda name: "/installed/codex")
     monkeypatch.setattr("thwip.cli.sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("thwip.cli.sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr("thwip.cli.console.input", lambda prompt: "yes")
+    async def confirm(question):
+        return "yes"
+    cli._ask_text = confirm
     monkeypatch.setattr("thwip.cli.print_info", lambda message: None)
     monkeypatch.setattr("thwip.cli.print_error", lambda message: events.append("error"))
     monkeypatch.setattr("thwip.cli.os.execv", lambda path, args: events.append((path, args)))
@@ -41,15 +43,20 @@ async def test_native_rejects_unsupported_arguments(launcher, command):
     assert events == []
 
 
-def test_native_decline_does_not_save_or_launch(launcher, monkeypatch):
+@pytest.mark.asyncio
+async def test_native_decline_does_not_save_or_launch(launcher, monkeypatch):
     cli, events = launcher
-    monkeypatch.setattr("thwip.cli.console.input", lambda prompt: "")
-    cli.cmd_native("codex")
+
+    async def decline(question):
+        return ""
+    cli._ask_text = decline
+    await cli.cmd_native("codex")
     assert events == []
 
 
 @pytest.mark.parametrize("failure", ["missing", "noninteractive", "project", "save", "exec"])
-def test_native_failure_stays_in_thwip(launcher, monkeypatch, failure):
+@pytest.mark.asyncio
+async def test_native_failure_stays_in_thwip(launcher, monkeypatch, failure):
     cli, events = launcher
 
     def fail(*args):
@@ -65,5 +72,5 @@ def test_native_failure_stays_in_thwip(launcher, monkeypatch, failure):
         cli.session.save = fail
     else:
         monkeypatch.setattr("thwip.cli.os.execv", fail)
-    cli.cmd_native("codex")
+    await cli.cmd_native("codex")
     assert events == (["save", "error"] if failure == "exec" else ["error"])

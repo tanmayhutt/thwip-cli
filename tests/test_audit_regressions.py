@@ -33,7 +33,9 @@ def cli(tmp_path, monkeypatch):
     cli.usage_tracker = UsageTracker()
     cli.tool_manager = ToolManager(str(tmp_path))
     cli.detector = SimpleNamespace(scan_all=list)
-    monkeypatch.setattr('builtins.input', lambda *args: '')
+    async def decline(question):
+        return ''
+    monkeypatch.setattr(cli, '_ask_text', decline)
     monkeypatch.setattr('getpass.getpass', lambda *args: '')
     console = Console(file=StringIO(), width=100, color_system=None)
     monkeypatch.setattr('thwip.cli.console', console)
@@ -258,7 +260,9 @@ async def test_failover_chain_model_must_be_listed_by_provider(cli, monkeypatch)
     async def fake_switch(name, model=''):
         switched.append((name, model))
     monkeypatch.setattr(cli, 'cmd_switch', fake_switch)
-    monkeypatch.setattr('builtins.input', lambda *args: '1')
+    async def choose(question):
+        return '1'
+    monkeypatch.setattr(cli, '_ask_text', choose)
     cli.current_agent = cli.registry.get_agent('openai')
     await cli.handle_limit_failover(LimitHit(error_type=LimitStatus.QUOTA_EXHAUSTED, message='usage limit'), {'openai'})
     assert switched == [('claude', 'fable')]

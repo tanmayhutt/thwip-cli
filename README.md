@@ -83,7 +83,6 @@ thwip --version
 | `/project [path]` | View or change project working directory |
 | `Ctrl + S` | Quick switch agent prompt |
 | `Ctrl + T` | Show agent status |
-| `Ctrl + H` | View history |
 | `/quit` | Exit thwip |
 
 Short aliases are available for frequent commands: `/a`, `/m`, `/s`, `/sw`, `/k`, `/g`, and `/t`.

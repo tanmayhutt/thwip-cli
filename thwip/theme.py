@@ -196,12 +196,14 @@ def render_about_guide(
     content.append("Combine, switch, and route across installed AI coding agents seamlessly.\n\n", style="dim")
 
     content.append("HOW IT WORKS\n", style="bold cyan")
-    content.append("  1. Auto-Detection:   Scans environment variables, local CLI agents, and existing credentials\n", style="dim")
-    content.append("                       in ~/.claude.json, ~/.gemini/config.json, ~/.config/openai/, or Ollama.\n", style="dim")
-    content.append("  2. Unified State:    Preserves text history; /handoff previews excluded state and model fit.\n", style="dim")
-    content.append("  3. Hot-Swapping:     Switch models with completed text history preserved.\n", style="dim")
-    content.append("  4. Universal Tools:  Provides safe file editing, shell commands, execution, and git operations.\n", style="dim")
-    content.append("  5. Quota Failover:   Catches HTTP 429 errors and offers immediate one-key fallback switching.\n\n", style="dim")
+    content.append("  1. Existing Sign-ins: Connects installed Codex, Claude Code, and Antigravity CLIs through their own\n", style="dim")
+    content.append("                       protocols using the login you already have. No API key or credential copy.\n", style="dim")
+    content.append("  2. Live Model Lists: Models come from the CLI or the provider's list endpoint, never a fixed list.\n", style="dim")
+    content.append("  3. Hot-Swapping:     /switch or /model changes provider or model; completed text history is kept.\n", style="dim")
+    content.append("  4. Tools:            Native CLIs bring their own tools (read-only by default). Direct API models use\n", style="dim")
+    content.append("                       Thwip's project-scoped file, shell, Python, and git tools with confirmation.\n", style="dim")
+    content.append("  5. Limit Failover:   When a CLI or API reports an exhausted limit, Thwip offers a one-key switch\n", style="dim")
+    content.append("                       and re-sends your message. /limits shows each account's usage windows.\n\n", style="dim")
 
     content.append("NAVIGATION & COMMANDS\n", style="bold cyan")
     content.append("  /switch <agent> [model]  Hot-swap active model mid-conversation (e.g. /switch google gemini-3.7-flash)\n", style="white")
@@ -224,7 +226,7 @@ def render_about_guide(
     content.append("KEYBOARD SHORTCUTS\n", style="bold cyan")
     content.append("  Ctrl+S                   Interactive model switcher prompt\n", style="white")
     content.append("  Ctrl+T                   Display current agent status and token counters\n", style="white")
-    content.append("  Ctrl+C                   Interrupt current response or tool execution\n", style="white")
+    content.append("  Ctrl+C                   Interrupt the current response, command, or prompt\n", style="white")
 
     return Panel(
         content,
