@@ -6,7 +6,7 @@ import pytest
 from rich.console import Console
 
 from thwip.agents import AgentRegistry
-from thwip.agents.base import AgentDone, Capability, LimitHit, LimitStatus, TextDelta
+from thwip.agents.base import AgentDone, Capability, LimitHit, LimitStatus, ModelInfo, TextDelta
 from thwip.cli import ThwipCLI
 from thwip.config import ThwipConfig, get_usage_path
 from thwip.limits import UsageTracker
@@ -203,3 +203,62 @@ async def test_failed_turn_removes_unanswered_user_message(cli, monkeypatch):
     cli.session.current_agent = 'openai'
     await cli.process_user_message('hello')
     assert cli.session.messages == []
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_at_native_permission_prompt_cancels_turn_and_closes_adapter(cli, monkeypatch):
+    from thwip.agents.base import NativePermission
+    from thwip.cli import TurnInterrupted
+
+    closed = []
+
+    class NativeAsking:
+        name = 'openai'
+        display_name = 'Native'
+        company = 'OpenAI'
+        native_tools = True
+        project = '.'
+        def is_configured(self):
+            return True
+        def is_installed(self):
+            return True
+        def get_capabilities_for_model(self, model):
+            return set()
+        async def chat(self, **kwargs):
+            try:
+                yield NativePermission('run something')
+                yield TextDelta(content='never reached')
+            finally:
+                closed.append(True)
+
+    async def interrupted(self, question):
+        raise TurnInterrupted
+
+    monkeypatch.setattr(ThwipCLI, '_ask_yes_no', interrupted)
+    cli.current_agent = NativeAsking()
+    cli.session.current_agent = 'openai'
+    await cli._run_interruptible(cli.process_user_message('hello'))
+    assert cli.session.messages == []
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_failover_chain_model_must_be_listed_by_provider(cli, monkeypatch):
+    """A chain entry like claude/claude-opus-5 must not force an unlisted model onto a native adapter."""
+    from thwip.agents.native_print import PrintAgent
+
+    native = PrintAgent('claude', '.')
+    native.ready = True
+    native.available_models = [ModelInfo(id='fable', name='Fable', is_default=True)]
+    monkeypatch.setattr(native, 'is_installed', lambda: True)
+    cli.registry._agents['claude'] = native
+    cli.config.fallback.chain = ['claude/claude-opus-5']
+    switched = []
+
+    async def fake_switch(name, model=''):
+        switched.append((name, model))
+    monkeypatch.setattr(cli, 'cmd_switch', fake_switch)
+    monkeypatch.setattr('builtins.input', lambda *args: '1')
+    cli.current_agent = cli.registry.get_agent('openai')
+    await cli.handle_limit_failover(LimitHit(error_type=LimitStatus.QUOTA_EXHAUSTED, message='usage limit'), {'openai'})
+    assert switched == [('claude', 'fable')]

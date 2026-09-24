@@ -316,6 +316,34 @@ class BaseAgent(ABC):
         """Return local catalog metadata without requesting provider discovery."""
         return list(self.available_models)
 
+    # --- Live catalog ---
+
+    catalog_source: str = "bundled"
+    discovery_error: str = ""
+
+    async def refresh_models(self) -> None:
+        """Replace the bundled catalog with the provider's live list when a key is configured.
+
+        The bundled list stays as an offline fallback and is labelled as such.
+        """
+        from thwip.agents.catalog import fetch_live_models, merge_catalog, supports_live_catalog
+        from thwip.agents.native_common import scrub
+
+        getter = getattr(self, "_get_api_key", None)
+        key = getter() if callable(getter) else None
+        if not key or not supports_live_catalog(self.name):
+            return
+        try:
+            live = await fetch_live_models(self.name, key)
+        except Exception as exc:
+            self.discovery_error = f"Live model list unavailable; showing the bundled fallback. {scrub(str(exc), 160)}"
+            return
+        if live:
+            bundled = type(self).available_models if isinstance(type(self).__dict__.get("available_models"), list) else self.available_models
+            self.available_models = merge_catalog(list(bundled), live)
+            self.catalog_source = "live"
+            self.discovery_error = ""
+
     def has_capability(self, cap: Capability) -> bool:
         """Check if this agent supports a capability."""
         return cap in self.capabilities

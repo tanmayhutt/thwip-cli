@@ -99,11 +99,16 @@ class AgentRegistry:
                 self._agents[name] = native
             native.project = project
             natives.append(native)
-        results = await asyncio.gather(*(native.refresh_models() for native in natives), return_exceptions=True)
-        for native, result in zip(natives, results):
+        # Direct adapters with a key fetch their live model list at the same time.
+        direct = [agent for agent in self._agents.values()
+                  if not getattr(agent, "native_tools", False) and agent.name != "ollama" and agent.is_configured()]
+        refreshing = natives + direct
+        results = await asyncio.gather(*(agent.refresh_models() for agent in refreshing), return_exceptions=True)
+        for agent, result in zip(refreshing, results):
             if isinstance(result, BaseException):
-                native.ready = False
-                native.discovery_error = f"Native discovery failed: {type(result).__name__}"
+                if getattr(agent, "native_tools", False):
+                    agent.ready = False
+                agent.discovery_error = f"Model discovery failed: {type(result).__name__}"
 
     @staticmethod
     def _native_candidate(name: str, project: str) -> BaseAgent | None:
