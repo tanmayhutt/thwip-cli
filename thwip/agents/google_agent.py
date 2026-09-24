@@ -2,7 +2,7 @@
 Google / Antigravity agent adapter.
 
 Capabilities: chat plus Thwip's local file, terminal, and Git tools.
-Detects Antigravity IDE, Gemini CLI, and Google API keys.
+Direct Gemini API adapter (API key). The signed-in Antigravity CLI is handled by the native print adapter.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from thwip.agents.base import (
     TokenUsage,
     ToolUseStart,
 )
+from thwip.endpoints import base_url
 
 
 class GoogleAgent(BaseAgent):
@@ -39,7 +40,7 @@ class GoogleAgent(BaseAgent):
     """
 
     name = "google"
-    display_name = "Antigravity / Gemini"
+    display_name = "Gemini API"
     company = "Google"
     description = "Google's Gemini models with Thwip's local coding tools"
     website = "https://gemini.google.com"
@@ -141,7 +142,8 @@ class GoogleAgent(BaseAgent):
                 )
             try:
                 from google import genai
-                self._client = genai.Client(api_key=key)
+                from google.genai import types as genai_types
+                self._client = genai.Client(api_key=key, http_options=genai_types.HttpOptions(base_url=base_url("google")))
             except ImportError:
                 raise RuntimeError(
                     "google-genai package not installed. Run: pip install google-genai"

@@ -54,21 +54,26 @@ class FakeRPC:
         self.closed = True
 
 
-@pytest.mark.parametrize('provider', ['openai', 'google'])
 @pytest.mark.asyncio
-async def test_discovered_models_replace_bundled_catalog(provider, monkeypatch):
-    agent = NativeAgent(provider, '.')
-    rpc = FakeRPC(provider)
+async def test_discovered_models_replace_bundled_catalog(monkeypatch):
+    agent = NativeAgent('openai', '.')
+    rpc = FakeRPC('openai')
     async def connect():
         return rpc
     monkeypatch.setattr(agent, '_connect', connect)
+    assert agent.get_model_info('explicit-new-model').id == 'explicit-new-model', 'pass-through before discovery'
     await agent.refresh_models()
     assert agent.ready and agent.get_default_model() == 'future-model'
-    assert agent.get_model_info('explicit-new-model').id == 'explicit-new-model'
+    assert agent.get_model_info('explicit-new-model') is None, 'only listed IDs once the CLI reported its list'
     assert rpc.closed
 
 
-@pytest.mark.parametrize('provider', ['openai', 'google'])
+def test_native_agent_is_codex_only():
+    with pytest.raises(ValueError):
+        NativeAgent('google', '.')
+
+
+@pytest.mark.parametrize('provider', ['openai'])
 @pytest.mark.parametrize('approve', [False, True])
 @pytest.mark.asyncio
 async def test_native_permission_response_and_completion(provider, approve, monkeypatch):
@@ -85,10 +90,7 @@ async def test_native_permission_response_and_completion(provider, approve, monk
     assert any(isinstance(event, TextDelta) and event.content == 'done' for event in events)
     assert isinstance(events[-1], AgentDone)
     response = rpc.sent[0]['result']
-    if provider == 'openai':
-        assert response['decision'] == ('accept' if approve else 'decline')
-    else:
-        assert response['outcome']['optionId'] == ('yes' if approve else 'no')
+    assert response['decision'] == ('accept' if approve else 'decline')
     assert rpc.closed
 
 
@@ -109,7 +111,7 @@ async def test_failed_turn_never_emits_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_discovery_failure_marks_connection_unready(monkeypatch):
-    agent = NativeAgent('google', '.')
+    agent = NativeAgent('openai', '.')
     async def connect():
         raise TimeoutError()
     monkeypatch.setattr(agent, '_connect', connect)

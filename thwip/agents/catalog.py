@@ -9,6 +9,7 @@ from __future__ import annotations
 import httpx
 
 from thwip.agents.base import ModelInfo
+from thwip.endpoints import base_url
 
 FETCH_TIMEOUT = 15.0
 ANTHROPIC_VERSION = "2023-06-01"
@@ -41,18 +42,15 @@ def _wanted(provider: str, model_id: str) -> bool:
 
 
 def _request(provider: str, api_key: str) -> tuple[str, dict, dict]:
+    root = base_url(provider)
     if provider == "openai":
-        return "https://api.openai.com/v1/models", {"Authorization": f"Bearer {api_key}"}, {}
+        return f"{root}/models", {"Authorization": f"Bearer {api_key}"}, {}
     if provider == "claude":
-        return "https://api.anthropic.com/v1/models", {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION}, {"limit": 100}
+        return f"{root}/v1/models", {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION}, {"limit": 100}
     if provider == "google":
-        return "https://generativelanguage.googleapis.com/v1beta/models", {}, {"key": api_key, "pageSize": 200}
-    if provider == "deepseek":
-        return "https://api.deepseek.com/models", {"Authorization": f"Bearer {api_key}"}, {}
-    if provider == "groq":
-        return "https://api.groq.com/openai/v1/models", {"Authorization": f"Bearer {api_key}"}, {}
-    if provider == "openrouter":
-        return "https://openrouter.ai/api/v1/models", {"Authorization": f"Bearer {api_key}"}, {}
+        return f"{root}/v1beta/models", {}, {"key": api_key, "pageSize": 200}
+    if provider in {"deepseek", "groq", "openrouter"}:
+        return f"{root}/models", {"Authorization": f"Bearer {api_key}"}, {}
     raise ValueError(f"No live catalog source for provider '{provider}'.")
 
 

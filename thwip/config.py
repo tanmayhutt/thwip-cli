@@ -231,6 +231,9 @@ class ThwipConfig:
     # Ollama
     ollama_host: str = "http://localhost:11434"
 
+    # Optional per-provider base URL overrides ([endpoints] table)
+    endpoints: dict[str, str] = field(default_factory=dict)
+
     # Sub-configs
     fallback: FallbackConfig = field(default_factory=FallbackConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
@@ -320,6 +323,14 @@ class ThwipConfig:
         if "host" in ollama:
             self.ollama_host = ollama["host"]
 
+        # Endpoint overrides: [endpoints] openai = "https://proxy.example/v1"
+        endpoints = data.get("endpoints", {})
+        if isinstance(endpoints, dict):
+            self.endpoints = {str(k).lower(): str(v).strip() for k, v in endpoints.items()
+                              if isinstance(v, str) and v.strip().startswith(("http://", "https://"))}
+            from thwip import endpoints as endpoint_overrides
+            endpoint_overrides.configure(self.endpoints)
+
         # Fallback
         fallback = data.get("fallback", {})
         if "enabled" in fallback:
@@ -363,6 +374,7 @@ class ThwipConfig:
             "ollama": {
                 "host": self.ollama_host,
             },
+            **({"endpoints": dict(self.endpoints)} if self.endpoints else {}),
             "fallback": {
                 "enabled": self.fallback.enabled,
                 "chain": self.fallback.chain,

@@ -171,7 +171,7 @@ async def test_discovery_parses_model_lists(monkeypatch):
     await google.refresh_models()
     assert google.ready and google.get_default_model() == "gemini-3.1-pro-high"
     assert {m.id: m.tier for m in google.available_models} == {"gemini-3.1-pro-high": "flagship", "gemini-3.8-flash-low": "fast"}
-    assert google.get_model_info("brand-new-model").id == "brand-new-model"
+    assert google.get_model_info("brand-new-model") is None, "Antigravity reports a live list; unlisted IDs are rejected"
 
     claude = PrintAgent("claude", ".")
 
@@ -189,6 +189,7 @@ async def test_discovery_parses_model_lists(monkeypatch):
     monkeypatch.setattr(claude, "_run_captured", logged_in)
     await claude.refresh_models()
     assert claude.ready and claude.get_default_model() == "fable"
+    assert claude.get_model_info("claude-opus-5-5").id == "claude-opus-5-5" and claude.get_model_info("bogus") is None
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 # Verification status
 
-Verified locally on 2026-09-24 for v1.5.1. The Python suite
-passes 240 offline tests. Exhaustive behavior across every provider and
+Verified locally on 2026-09-24 for v1.6.0. The Python suite
+passes 263 offline tests. Exhaustive behavior across every provider and
 configuration has not been established.
 
 ## Native CLI connections (2026-09-24)
@@ -19,6 +19,7 @@ each using its existing sign-in. No API keys were configured.
 | Ctrl+C during a response | Turn cancelled, child process terminated, REPL continued, unanswered message removed |
 | Ctrl+C at a Codex permission prompt | Turn cancelled, no file created, no leftover process, REPL continued |
 | Usage-limit failover | With a test-only shim making Codex report "You've hit your usage limit", the real REPL showed the alternatives, switched to Claude Code on `1`, retried the message, and answered; history held one clean pair |
+| Direct API adapters (v1.6.0) | All six (OpenAI, Anthropic, Google, DeepSeek, Groq, OpenRouter) run end to end through their real SDKs over HTTP against `tests/fake_providers.py`: live catalog, streamed text with usage, tool call and result round trip, HTTP 429 to LimitHit. The real REPL was also driven against the fake with direct keys: startup, live `/models`, chat, read_file tool round, provider switches, and 429 failover |
 | Full command sweep (v1.5.1) | Every slash command with invalid arguments, native launcher decline, key picker cancel, Ctrl+T, Ctrl+C inside pickers and confirmations, Backspace editing; found and fixed Backspace triggering `/history` via the Ctrl+H binding |
 | Parity commands | Live REPL run: `!git log`, `/model` picker, `@file` mention answered by Codex, `/compact` summary, `/export`, `/copy`, `/diff`, `/new`, `/resume`, `/usage` |
 | Live catalogs | OpenRouter public list fetched live (459 models with context and pricing); other providers covered by recorded-payload tests because no keys are present here |
@@ -35,8 +36,7 @@ error. The protocol enum is `read-only`. A regression test now checks the reques
 Remaining limitations: the Antigravity CLI showed intermittent network resets to
 Google's backend during testing, which surface as turn errors; Claude Code's model
 aliases are a curated list because the CLI exposes no model listing; native usage
-limit failover was observed live only through an injected limit, not a real provider cap; the real Gemini
-CLI ACP path is covered by mocked tests only because it is not installed here.
+limit failover was observed live only through an injected limit, not a real provider cap; the Gemini CLI path was removed because that CLI is discontinued; Google native is the Antigravity CLI.
 
 | Area | Evidence | Remaining limitation |
 | --- | --- | --- |
@@ -45,7 +45,7 @@ CLI ACP path is covered by mocked tests only because it is not installed here.
 | Provider switching and handoff | All seven provider catalogs, portable history, bounded failover | Live account quotas and model availability unverified |
 | Tool execution | Real temporary-file operations, path containment, process timeout/cancellation, invalid arguments | Shell and code tools retain local user privileges; output capture memory is unbounded |
 | Native Codex launcher | Save-before-launch, consent, flags, missing binary, terminal checks, failures | Mocked process replacement; no conversation transfer |
-| Native CLI connections | Live REPL runs above; mocked protocol tests for approvals, failures, limits, prompt building, discovery parsing | Gemini ACP path mocked only; live limit failover not observed |
+| Native CLI connections | Live REPL runs above; mocked protocol tests for approvals, failures, limits, prompt building, discovery parsing | A real provider usage cap has not been observed; failover proven with an injected limit and with a real HTTP 429 from the fake provider |
 | Provider responses | Mocked native tool continuations; DeepSeek/Groq/OpenRouter streaming, usage-only chunks, 429/500 errors and serialized tool arguments | Other streaming and error branches still have coverage gaps |
 | Display/config/auth | Configuration validation, display settings, credential boundaries, short-key masking | No full terminal/platform matrix |
 | Usage | Atomic writes, malformed records, valid totals | Unknown catalog pricing may appear as zero estimated cost |
