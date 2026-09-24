@@ -68,6 +68,39 @@ from thwip.theme import (
 )
 from thwip.tools import ToolManager
 
+# prompt_toolkit's cursor-position query is answered by the terminal with an escape sequence.
+# During a long native turn nobody reads stdin, so the answer would be echoed as ^[ ... R and later
+# swallowed as input. The layout does not need it, so disable the query.
+os.environ.setdefault("PROMPT_TOOLKIT_NO_CPR", "1")
+
+
+class QuietTerminal:
+    """Turn off keyboard echo while a turn runs and drop stray input before the next prompt."""
+
+    def __enter__(self):
+        self._saved = None
+        try:
+            import termios
+            self._fd = sys.stdin.fileno()
+            if sys.stdin.isatty():
+                self._saved = termios.tcgetattr(self._fd)
+                quiet = termios.tcgetattr(self._fd)
+                quiet[3] &= ~termios.ECHO
+                termios.tcsetattr(self._fd, termios.TCSANOW, quiet)
+        except (ImportError, OSError, ValueError, AttributeError):
+            self._saved = None
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            import termios
+            if self._saved is not None:
+                termios.tcflush(self._fd, termios.TCIFLUSH)
+                termios.tcsetattr(self._fd, termios.TCSANOW, self._saved)
+        except (ImportError, OSError, ValueError, AttributeError):
+            pass
+        return False
+
 
 class TurnInterrupted(Exception):
     """Raised when the user presses Ctrl+C at a prompt shown during a turn."""
@@ -217,7 +250,8 @@ class ThwipCLI:
                     continue
 
                 # Process chat message with agent; Ctrl+C interrupts the turn, not the REPL.
-                await self._run_interruptible(self.process_user_message(self._expand_mentions(user_input)))
+                with QuietTerminal():
+                    await self._run_interruptible(self.process_user_message(self._expand_mentions(user_input)))
 
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[dim]Exiting thwip. Goodbye![/dim]")
