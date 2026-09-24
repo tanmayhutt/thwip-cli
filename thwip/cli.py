@@ -305,7 +305,7 @@ class ThwipCLI:
             self.cmd_handoff(arg1, arg2)
 
         elif cmd == "/native":
-            self.cmd_native(arg1, arg2)
+            await self.cmd_native(arg1, arg2)
 
         elif cmd in ("/agents", "/list", "/a"):
             self.cmd_show_agents()
@@ -653,7 +653,7 @@ class ThwipCLI:
             table.add_row(name, cat, desc, f"[bold green]{status}[/bold green]")
         console.print(table)
 
-    def cmd_native(self, provider: str, extra: str = "") -> None:
+    async def cmd_native(self, provider: str, extra: str = "") -> None:
         """Replace this REPL with the native CLI without copying its credentials."""
         if provider != "codex" or extra:
             print_info("Usage: /native codex. Other native providers are not supported yet.")
@@ -675,7 +675,7 @@ class ThwipCLI:
             "Your Thwip session will be saved, but its conversation is not transferred. "
             "Restart Thwip and use /session load to return."
         )
-        if console.input("Open native Codex? [y/N] ").strip().lower() not in {"y", "yes"}:
+        if not await self._ask_yes_no("Open native Codex? [y/N]"):
             return
         try:
             saved = self.session.save()
@@ -723,7 +723,7 @@ class ThwipCLI:
             ("/project [path]", "View or change project working directory"),
             ("Ctrl + S", "Interactive agent/model switcher prompt"),
             ("Ctrl + T", "Status view and token counters"),
-            ("Ctrl + C", "Interrupt active response or tool execution"),
+            ("Ctrl + C", "Interrupt the current response, command, or prompt"),
             ("/quit", "Exit thwip"),
         ]
         for c, d in commands:
@@ -809,7 +809,7 @@ class ThwipCLI:
             if not_installed > 0:
                 console.print(f"\n  [dim]{not_installed} other providers available (DeepSeek, Groq, Ollama, OpenRouter). Use /agents to see all.[/dim]")
 
-            choice = input(f"\nEnter choice [1-{len(ordered)}]: ").strip()
+            choice = await self._ask_text(f"Enter choice [1-{len(ordered)}]:")
             if choice.isdigit() and 1 <= int(choice) <= len(ordered):
                 agent_name = ordered[int(choice) - 1].name
             elif choice.lower() in [a.name for a in installed]:
@@ -1080,7 +1080,7 @@ class ThwipCLI:
         console.print("[dim]Configure securely with [bold white]/key <provider>[/bold white] or choose a number below.[/dim]")
 
         try:
-            choice = input("\nEnter choice [1-6] to configure (or press Enter to return): ").strip()
+            choice = await self._ask_text("Enter choice [1-6] to configure (or press Enter to return):")
             if not choice:
                 return
             target_prov = provider_map.get(choice.lower())
@@ -1406,8 +1406,7 @@ class ThwipCLI:
                 approved = True
                 read_only = request.tool_name in {"read_file", "list_files", "git_status", "git_diff"}
                 if self.config.confirm_tools and not read_only:
-                    answer = input("  Allow this action? [y/N]: ").strip().lower()
-                    approved = answer in {"y", "yes"}
+                    approved = await self._ask_yes_no("  Allow this action? [y/N]:")
                 output = (
                     self.tool_manager.execute_tool(request.tool_name, request.args)
                     if approved
@@ -1499,9 +1498,9 @@ class ThwipCLI:
             print_warning("No untried configured providers remain. Stopped without repeating failed requests.")
             return
 
-        choice = "1" if self.config.limits.auto_switch else input(
-            "\nSwitch to alternative agent now? [1 to switch, Enter to cancel]: "
-        ).strip()
+        choice = "1" if self.config.limits.auto_switch else await self._ask_text(
+            "Switch to alternative agent now? [1 to switch, Enter to cancel]:"
+        )
         if choice == "1" or choice.lower() == "y":
             target_alt = alternatives[0]
             for a in ready:
