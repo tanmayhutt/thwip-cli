@@ -1,6 +1,7 @@
 """Native protocol behavior without credentials or model requests."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,8 @@ class FakeRPC:
         self.closed = False
         self.provider = provider
         self.failure = failure
+        self.process = SimpleNamespace(returncode=None)  # looks alive, like a running app-server
+        self.resume_fails = False
 
     async def request(self, method, params, **kwargs):
         self.requests.append((method, params))
@@ -28,6 +31,10 @@ class FakeRPC:
                     'availableModels': [{'modelId': 'future-model', 'name': 'Future'}]}}
         if method == 'thread/start':
             return {'thread': {'id': 't'}}
+        if method == 'thread/resume':
+            if self.resume_fails:
+                raise RuntimeError('Native CLI rejected thread/resume (code -32600): unknown thread')
+            return {'thread': {'id': params['threadId']}}
         if method == 'turn/start':
             await self.events.put({'id': 99, 'method': 'item/commandExecution/requestApproval',
                                    'params': {'command': 'touch example'}})
@@ -52,6 +59,7 @@ class FakeRPC:
 
     async def close(self):
         self.closed = True
+        self.process = SimpleNamespace(returncode=0)
 
 
 @pytest.mark.asyncio
@@ -88,9 +96,11 @@ async def test_native_permission_response_and_completion(provider, approve, monk
         if isinstance(event, NativePermission):
             event.approved = approve
     assert any(isinstance(event, TextDelta) and event.content == 'done' for event in events)
-    assert isinstance(events[-1], AgentDone)
+    assert isinstance(events[-1], AgentDone) and events[-1].native_session == {'id': 't'}
     response = rpc.sent[0]['result']
     assert response['decision'] == ('accept' if approve else 'decline')
+    assert not rpc.closed, 'the app-server stays alive between turns'
+    await agent.close()
     assert rpc.closed
 
 
@@ -150,6 +160,7 @@ async def test_codex_usage_limit_failure_becomes_limit_hit(monkeypatch):
     monkeypatch.setattr(agent, '_connect', connect)
     events = [event async for event in agent.chat([{'role': 'user', 'content': 'hi'}], model='future-model')]
     assert isinstance(events[-1], LimitHit) and events[-1].error_type == LimitStatus.QUOTA_EXHAUSTED
+    await agent.close()
     assert rpc.closed
 
 
@@ -198,3 +209,64 @@ async def test_codex_rate_limit_notification_is_recorded(monkeypatch):
     assert agent.limit_windows == [
         {'label': '5h', 'used_percent': 2, 'resets_at': 1790212672},
         {'label': '7d', 'used_percent': 23, 'resets_at': None}]
+
+
+def _turn_prompt(rpc):
+    return next(params for method, params in rpc.requests if method == 'turn/start')['input'][0]['text']
+
+
+@pytest.mark.asyncio
+async def test_codex_resumes_thread_and_sends_only_new_messages(monkeypatch):
+    agent = NativeAgent('openai', '.')
+    rpc = FakeRPC('openai')
+    async def connect():
+        return rpc
+    monkeypatch.setattr(agent, '_connect', connect)
+    history = [{'role': 'user', 'content': 'first'}, {'role': 'assistant', 'content': 'one'},
+               {'role': 'user', 'content': 'second'}]
+    events = [e async for e in agent.chat(history, model='future-model', resume={'id': 'thread-9', 'synced': 2})]
+    assert isinstance(events[-1], AgentDone) and events[-1].native_session == {'id': 'thread-9'}
+    methods = [m for m, _ in rpc.requests]
+    assert 'thread/resume' in methods and 'thread/start' not in methods
+    assert _turn_prompt(rpc) == 'second', 'only the new message is sent to a resumed thread'
+    # Same process, same thread: no second resume request.
+    rpc.requests.clear()
+    history += [{'role': 'assistant', 'content': 'two'}, {'role': 'user', 'content': 'third'}]
+    [e async for e in agent.chat(history, model='future-model', resume={'id': 'thread-9', 'synced': 4})]
+    assert 'thread/resume' not in [m for m, _ in rpc.requests] and _turn_prompt(rpc) == 'third'
+
+
+@pytest.mark.asyncio
+async def test_codex_catch_up_block_after_other_providers_answered(monkeypatch):
+    agent = NativeAgent('openai', '.')
+    rpc = FakeRPC('openai')
+    async def connect():
+        return rpc
+    monkeypatch.setattr(agent, '_connect', connect)
+    history = [{'role': 'user', 'content': 'a'}, {'role': 'assistant', 'content': 'b'},
+               {'role': 'user', 'content': 'c'}, {'role': 'assistant', 'content': 'd by claude'},
+               {'role': 'user', 'content': 'e'}]
+    [e async for e in agent.chat(history, model='future-model', resume={'id': 'thread-9', 'synced': 2})]
+    prompt = _turn_prompt(rpc)
+    assert 'Missed conversation' in prompt and 'd by claude' in prompt and prompt.endswith('Final user message:\ne')
+    assert '[User]\na' not in prompt, 'messages the thread already saw are not resent'
+
+
+@pytest.mark.asyncio
+async def test_codex_falls_back_to_new_thread_when_resume_fails(monkeypatch):
+    from thwip.agents.base import NativeActivity
+
+    agent = NativeAgent('openai', '.')
+    rpc = FakeRPC('openai')
+    rpc.resume_fails = True
+    async def connect():
+        return rpc
+    monkeypatch.setattr(agent, '_connect', connect)
+    history = [{'role': 'user', 'content': 'first'}, {'role': 'assistant', 'content': 'one'},
+               {'role': 'user', 'content': 'second'}]
+    events = [e async for e in agent.chat(history, model='future-model', resume={'id': 'gone', 'synced': 2})]
+    assert any(isinstance(e, NativeActivity) and 'unavailable' in e.description for e in events)
+    start = next(params for method, params in rpc.requests if method == 'thread/start')
+    assert start['ephemeral'] is False
+    assert '[User]\nfirst' in _turn_prompt(rpc), 'full transcript goes to the new thread'
+    assert events[-1].native_session == {'id': 't'}

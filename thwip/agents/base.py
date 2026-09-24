@@ -144,6 +144,8 @@ class AgentDone:
     usage: TokenUsage = field(default_factory=TokenUsage)
     stop_reason: str = "end_turn"
     native_state: dict[str, Any] = field(default_factory=dict)
+    # Identifier of the native CLI session that produced this turn, so it can be resumed next time.
+    native_session: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

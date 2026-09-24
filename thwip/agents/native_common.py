@@ -102,3 +102,28 @@ def network_hint(text: str) -> str:
         return (" The CLI could not reach its backend. This is usually the local network or a firewall "
                 "resetting the connection; try again, or switch to another network or a VPN.")
     return ""
+
+
+def build_incremental_prompt(messages: list[dict], system_prompt: str | None, synced: int) -> tuple[str, bool]:
+    """Return (prompt, is_full).
+
+    With no usable native session (synced == 0) the full transcript is sent. When the
+    native session already saw `synced` portable messages, only the messages after that
+    point are sent: just the new request, or a short catch-up block when other providers
+    answered in between.
+    """
+    portable = [m for m in messages if m.get("role") in {"user", "assistant"} and isinstance(m.get("content"), str)]
+    if synced <= 0 or synced >= len(portable):
+        return build_native_prompt(messages, system_prompt), True
+    missed = portable[synced:]
+    latest = missed[-1]
+    earlier = missed[:-1]
+    if not earlier:
+        return latest["content"].strip(), False
+    lines = [("While you were away, the conversation continued with another assistant. "
+             "Read it as context, then respond to the final user message."), "", "Missed conversation:"]
+    for message in earlier:
+        speaker = "User" if message["role"] == "user" else "Assistant"
+        lines += [f"[{speaker}]", message["content"].strip(), ""]
+    lines += ["Final user message:", latest["content"].strip()]
+    return "\n".join(lines), False

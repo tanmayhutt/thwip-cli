@@ -48,6 +48,8 @@ Start the interactive terminal in your current project directory:
 thwip
 thwip --project ~/code/my-app   # open a specific project
 thwip --version
+thwip man                       # read the manual page
+thwip install-man               # then `man thwip` works
 ```
 
 ---
@@ -104,6 +106,16 @@ API key for the same provider always takes precedence over the native connection
 not in the catalog is passed to the CLI for validation instead of being rejected by
 a bundled list. A model available in a desktop app may still be absent from the
 installed CLI's catalog or account access.
+
+Each provider keeps a warm native session. The first message to a provider sends the
+portable conversation once; after that only new messages are sent. Codex keeps one
+`app-server` process running and resumes its thread; Claude Code uses `--session-id`
+and `--resume`; Antigravity uses `--conversation`. When you come back to a provider after
+chatting with another one, it receives a short catch-up block containing only what it
+missed. The native session IDs are stored in the thwip session file next to the
+transcript, validated on load, shown by `/status`, and cleared by `/new`, `/clear`,
+`/compact`, and a project change. If a CLI can no longer continue a session, thwip says
+so and resends the full conversation to a fresh one.
 
 Native connections are read-only by default. Codex starts with a read-only sandbox
 and asks before operations outside it; approval requests appear in Thwip with the
