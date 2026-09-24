@@ -4,6 +4,8 @@ Agent registry and discovery for thwip.
 
 from __future__ import annotations
 
+import asyncio
+
 from thwip.agents.base import BaseAgent
 from thwip.agents.claude_agent import ClaudeAgent
 from thwip.agents.deepseek_agent import DeepSeekAgent
@@ -75,6 +77,46 @@ class AgentRegistry:
         }
         normalized = alias_map.get(name.lower().strip(), name.lower().strip())
         return self._agents.get(normalized)
+
+    async def connect_native_agents(self, project: str) -> None:
+        """Use installed, signed-in CLIs for providers without a direct API key.
+
+        Codex uses its App Server protocol. Claude Code and the Antigravity CLI
+        use their stream-json print modes. A real Gemini CLI falls back to ACP.
+        A configured direct API key always takes precedence.
+        """
+        natives = []
+        for name in ("openai", "claude", "google"):
+            current = self._agents[name]
+            if getattr(current, "native_tools", False):
+                native = current
+            elif current.is_configured():
+                continue
+            else:
+                native = self._native_candidate(name, project)
+                if native is None:
+                    continue
+                self._agents[name] = native
+            native.project = project
+            natives.append(native)
+        results = await asyncio.gather(*(native.refresh_models() for native in natives), return_exceptions=True)
+        for native, result in zip(natives, results):
+            if isinstance(result, BaseException):
+                native.ready = False
+                native.discovery_error = f"Native discovery failed: {type(result).__name__}"
+
+    @staticmethod
+    def _native_candidate(name: str, project: str) -> BaseAgent | None:
+        from thwip.agents.native_agent import NativeAgent
+        from thwip.agents.native_print import PrintAgent
+
+        if name == "openai":
+            candidates = [NativeAgent("openai", project)]
+        elif name == "claude":
+            candidates = [PrintAgent("claude", project)]
+        else:
+            candidates = [PrintAgent("google", project), NativeAgent("google", project)]
+        return next((candidate for candidate in candidates if candidate.is_installed()), None)
 
     def list_agents(self) -> list[BaseAgent]:
         """Return all instantiated agents."""
