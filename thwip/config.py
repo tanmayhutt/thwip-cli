@@ -206,6 +206,15 @@ class DisplayConfig:
 
 
 @dataclass
+class MemoryConfig:
+    enabled: bool = True
+    file: str = "context.md"
+    vault: str = ""                 # Obsidian vault (any Markdown folder); empty until onboarding chooses one
+    offer_update_on_quit: bool = True
+    onboarded: bool = False         # first-run vault question already answered
+
+
+@dataclass
 class LimitsConfig:
     warn_at_percent: int = 80
     auto_switch: bool = False  # Prompt user vs auto-switch
@@ -238,6 +247,7 @@ class ThwipConfig:
     fallback: FallbackConfig = field(default_factory=FallbackConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     @classmethod
     def load(cls) -> ThwipConfig:
@@ -323,6 +333,20 @@ class ThwipConfig:
         if "host" in ollama:
             self.ollama_host = ollama["host"]
 
+        # Project memory and vault
+        memory = data.get("memory", {})
+        if isinstance(memory, dict):
+            if isinstance(memory.get("enabled"), bool):
+                self.memory.enabled = memory["enabled"]
+            if isinstance(memory.get("file"), str) and memory["file"].strip() and "/" not in memory["file"]:
+                self.memory.file = memory["file"].strip()
+            if isinstance(memory.get("vault"), str):
+                self.memory.vault = memory["vault"].strip()
+            if isinstance(memory.get("offer_update_on_quit"), bool):
+                self.memory.offer_update_on_quit = memory["offer_update_on_quit"]
+            if isinstance(memory.get("onboarded"), bool):
+                self.memory.onboarded = memory["onboarded"]
+
         # Endpoint overrides: [endpoints] openai = "https://proxy.example/v1"
         endpoints = data.get("endpoints", {})
         if isinstance(endpoints, dict):
@@ -375,6 +399,13 @@ class ThwipConfig:
                 "host": self.ollama_host,
             },
             **({"endpoints": dict(self.endpoints)} if self.endpoints else {}),
+            "memory": {
+                "enabled": self.memory.enabled,
+                "file": self.memory.file,
+                "vault": self.memory.vault,
+                "offer_update_on_quit": self.memory.offer_update_on_quit,
+                "onboarded": self.memory.onboarded,
+            },
             "fallback": {
                 "enabled": self.fallback.enabled,
                 "chain": self.fallback.chain,

@@ -216,6 +216,7 @@ def render_about_guide(
     content.append("  /compact                 Summarize the conversation to free context before a switch\n", style="white")
     content.append("  /diff, /copy, /export    Git diff, copy last response, export the conversation\n", style="white")
     content.append("  !<command>, @path        Run a shell command; attach a project file to a message\n", style="white")
+    content.append("  /memory [update|sync]    Project memory shared by every agent; filed into your second-brain vault\n", style="white")
     content.append("  /session save <name>     Save current conversation to disk\n", style="white")
     content.append("  /session load <name>     Restore and continue a saved session\n", style="white")
     content.append("  /history                 View turn summary across models\n", style="white")

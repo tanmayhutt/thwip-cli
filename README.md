@@ -18,6 +18,7 @@
 - **Tool Layer**: Shared file editing, code execution (Python, Node, Shell), and Git integration across connected models.
 - **Session Persistence**: Save and resume sessions across projects with `/session save` and `/session load`.
 - **Familiar Flow**: The same everyday commands as Codex, Claude Code, and Antigravity (`/model`, `/new`, `/resume`, `/compact`, `/diff`, `/copy`, `!cmd`, `@file`), plus autocompletion, Ctrl+S / Ctrl+T shortcuts, and streaming Markdown.
+- **Project Memory and Second Brain**: One `context.md` per project that every agent reads and maintains, filed into your Obsidian vault with cross-project links by stack, area, and tag.
 - **Live Model Lists**: Model catalogs come from the connected CLI or the provider's list-models endpoint, never from a hardcoded list.
 
 ---
@@ -137,6 +138,35 @@ providers.
 replaces Thwip with the Codex CLI itself in the selected project. Conversation
 history is not transferred by the launcher; use `/session load` after restarting
 Thwip to resume.
+
+## Project memory and your second brain
+
+Every project gets one canonical memory file, `context.md` in the project root, that
+every agent you use through thwip reads and helps maintain. It records the snapshot,
+current work (Now, Blocked, Next), architecture notes, decisions, known issues, and
+dated recent changes. Whichever provider you switch to receives it as instructions, so
+the project's state survives agent switches and sessions, not just the conversation.
+
+On first run thwip offers to connect a second-brain vault: it detects vaults registered
+with the Obsidian desktop app, or creates a new Markdown folder. In the vault each
+project gets a stable index card under `Projects/`, hub notes under `Stack/`, `Areas/`,
+and `Tags/`, and a `Projects.md` dashboard. Projects that share a stack, area, or tag
+link to each other through those hubs and a "Related projects" list on every card.
+thwip only writes notes it created itself (marked `generated_by: thwip`); hand-written
+notes are never touched.
+
+| Command | Action |
+|:---|:---|
+| `/memory` | Show this project's memory file |
+| `/memory init [area]` | Create it from the template with detected stack and entry points |
+| `/memory update` | Ask the current model to revise it from the conversation; a diff is shown and written only after you confirm |
+| `/memory edit` | Open it in `$EDITOR` |
+| `/memory sync` | File the project into the vault and refresh hubs and the dashboard |
+| `/memory vault <path>` | Connect or change the vault |
+| `/memory link` | Add a pointer to `AGENTS.md` and `CLAUDE.md` so the CLIs read it outside thwip too |
+
+When you `/quit` after a real conversation, thwip offers the update once. Settings live under
+`[memory]` in `~/.thwip/config.toml`: `enabled`, `file`, `vault`, `offer_update_on_quit`.
 
 ## Live model lists
 
