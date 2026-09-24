@@ -1,7 +1,7 @@
 # Verification status
 
-Verified locally on 2026-09-24 for v1.6.0. The Python suite
-passes 263 offline tests. Exhaustive behavior across every provider and
+Verified locally on 2026-09-24 for v1.6.1. The Python suite
+passes 265 offline tests on Python 3.11, 3.12, and 3.13. Exhaustive behavior across every provider and
 configuration has not been established.
 
 ## Native CLI connections (2026-09-24)
@@ -19,6 +19,8 @@ each using its existing sign-in. No API keys were configured.
 | Ctrl+C during a response | Turn cancelled, child process terminated, REPL continued, unanswered message removed |
 | Ctrl+C at a Codex permission prompt | Turn cancelled, no file created, no leftover process, REPL continued |
 | Usage-limit failover | With a test-only shim making Codex report "You've hit your usage limit", the real REPL showed the alternatives, switched to Claude Code on `1`, retried the message, and answered; history held one clean pair |
+| Ollama adapter (v1.6.1) | End to end against the fake Ollama routes: model list, streamed text with usage, tool call, HTTP 500 and unreachable server now raise clear errors instead of ending the turn silently |
+| Dependency audits (v1.6.1) | pip-audit reports no known vulnerabilities; npm audit reports zero |
 | Direct API adapters (v1.6.0) | All six (OpenAI, Anthropic, Google, DeepSeek, Groq, OpenRouter) run end to end through their real SDKs over HTTP against `tests/fake_providers.py`: live catalog, streamed text with usage, tool call and result round trip, HTTP 429 to LimitHit. The real REPL was also driven against the fake with direct keys: startup, live `/models`, chat, read_file tool round, provider switches, and 429 failover |
 | Full command sweep (v1.5.1) | Every slash command with invalid arguments, native launcher decline, key picker cancel, Ctrl+T, Ctrl+C inside pickers and confirmations, Backspace editing; found and fixed Backspace triggering `/history` via the Ctrl+H binding |
 | Parity commands | Live REPL run: `!git log`, `/model` picker, `@file` mention answered by Codex, `/compact` summary, `/export`, `/copy`, `/diff`, `/new`, `/resume`, `/usage` |
