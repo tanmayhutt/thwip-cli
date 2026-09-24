@@ -73,6 +73,13 @@ Markdown with model attribution.
 Usage windows reported by each CLI account, API cost estimates, session status,
 and the conversation with model badges.
 .TP
+.B /memory [show|init [area]|edit|update|sync|vault <path>|link]
+Project memory: one
+.I context.md
+per project that every agent reads and helps maintain, filed into your second-brain
+vault with cross-project links by stack, area, and tag. Updates proposed by the model
+are shown as a diff and written only after confirmation.
+.TP
 .B /key [provider]
 Enter a direct API key with hidden input.
 .TP
@@ -110,7 +117,11 @@ Direct API keys. A key takes precedence over the native CLI connection for that 
 .SH FILES
 .TP
 .I ~/.thwip/config.toml
-Defaults, keys entered with /key, endpoint overrides, fallback chain, display settings.
+Defaults, keys entered with /key, endpoint overrides, fallback chain, display settings,
+and the [memory] section (file name, vault path, quit-time offer).
+.TP
+.I <project>/context.md
+The project's memory file, shared by every agent used in that project.
 .TP
 .I ~/.thwip/sessions/
 Saved sessions, including the native CLI session IDs used to resume each provider.

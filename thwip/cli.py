@@ -48,6 +48,7 @@ from thwip.config import DisplayConfig, ThwipConfig, get_config_dir
 from thwip.detector import SystemDetector
 from thwip.handoff import build_handoff_report, local_capabilities, local_model
 from thwip.limits import UsageTracker
+from thwip.memory import ProjectMemory, Vault, detect_obsidian_vaults
 from thwip.session import Session
 from thwip.shortcuts import ThwipCompleter, create_keybindings
 from thwip.theme import (
@@ -209,6 +210,7 @@ class ThwipCLI:
         console.print(
             "  [dim]Type [bold white]/help[/bold white] for commands, [bold white]/switch[/bold white] to change agent, or just start chatting.[/dim]\n"
         )
+        await self._memory_onboarding()
 
         # Setup prompt session
         history_path = get_config_dir() / "history.txt"
@@ -218,10 +220,13 @@ class ThwipCLI:
         except OSError:
             pass
         history_file = str(history_path)
+        # With cursor-position queries disabled, prompt_toolkit would print blank lines to reserve room for
+        # the completion menu; let it scroll instead.
         prompt_session: PromptSession = PromptSession(
             history=SafeFileHistory(history_file),
             completer=ThwipCompleter([a.name for a in self.registry.list_agents()]),
             key_bindings=create_keybindings(),
+            reserve_space_for_menu=0,
         )
 
         while True:
@@ -246,6 +251,7 @@ class ThwipCLI:
                 if user_input.startswith("/"):
                     handled = await self._run_interruptible(self.handle_command(user_input))
                     if handled == "QUIT":
+                        await self._run_interruptible(self._offer_memory_update("quitting"))
                         break
                     continue
 
@@ -273,7 +279,7 @@ class ThwipCLI:
         Ctrl+C here interrupts the current turn or command instead of exiting Thwip.
         """
         try:
-            answer = await PromptSession().prompt_async(HTML(f"<b>{question}</b> "))
+            answer = await PromptSession(reserve_space_for_menu=0).prompt_async(HTML(f"<b>{question}</b> "))
         except (KeyboardInterrupt, EOFError):
             raise TurnInterrupted from None
         return answer.strip()
@@ -395,6 +401,9 @@ class ThwipCLI:
 
         elif cmd == "/export":
             self.cmd_export(cmd_line.partition(" ")[2].strip())
+
+        elif cmd in ("/memory", "/mem", "/brain"):
+            await self.cmd_memory(arg1.lower(), cmd_line.partition(" ")[2].partition(" ")[2].strip())
 
         elif cmd == "/detect":
             await self.registry.connect_native_agents(str(Path(self.session.project_path).resolve()))
@@ -656,6 +665,232 @@ class ThwipCLI:
             return text
         return text + "\n\n" + "\n\n".join(attachments)
 
+    # --- Project memory and second brain ---
+
+    def _memory_config(self):
+        from thwip.config import MemoryConfig
+        return getattr(self.config, "memory", None) or MemoryConfig()
+
+    def _memory(self) -> ProjectMemory:
+        return ProjectMemory(self.session.project_path, self._memory_config().file)
+
+    def _vault(self) -> Vault | None:
+        path = self._memory_config().vault
+        return Vault(path) if path else None
+
+    def _system_prompt_with_memory(self) -> str:
+        """Base instructions plus the project's memory file, so every provider shares the same project state."""
+        base = self.session.system_prompt or ""
+        if not self._memory_config().enabled:
+            return base
+        injection = self._memory().injection()
+        return f"{base}\n\n{injection}".strip() if injection else base
+
+    async def _memory_onboarding(self) -> None:
+        """First run: connect a second-brain vault. Detected Obsidian vaults are offered; a new one can be created."""
+        cfg = self._memory_config()
+        if not cfg.enabled or cfg.onboarded or not sys.stdin.isatty():
+            return
+        vaults = detect_obsidian_vaults()
+        default_new = str(Path.home() / "thwip-brain")
+        console.print(Panel(Text(
+            "thwip keeps one memory file per project (context.md) that every agent you use reads and helps maintain.\n"
+            "It can also file each project into a second-brain vault (an Obsidian vault or any Markdown folder), where\n"
+            "projects that share a stack, area, or tag link to each other. thwip only writes notes it created itself."),
+            title="Second brain", box=box.ROUNDED))
+        options = [f"Use existing Obsidian vault: {path}" for path in vaults] + [f"Create a new vault at {default_new}", "Skip for now"]
+        for index, option in enumerate(options, 1):
+            console.print(f"  [bold white]{index}.[/bold white] {option}")
+        try:
+            answer = await self._ask_text(f"Choose [1-{len(options)}] or type a folder path:")
+        except TurnInterrupted:
+            answer = ""
+        chosen = ""
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            index = int(answer) - 1
+            if index < len(vaults):
+                chosen = vaults[index]
+            elif index == len(vaults):
+                chosen = default_new
+        elif answer:
+            chosen = answer
+        if chosen:
+            vault = Vault(chosen)
+            try:
+                vault.create()
+            except OSError as exc:
+                print_error(f"Could not create the vault folder: {exc}")
+                chosen = ""
+        cfg.vault = chosen
+        cfg.onboarded = True
+        with contextlib.suppress(Exception):
+            self.config.save()
+        if chosen:
+            print_success(f"Second brain connected: {chosen}. Use /memory to view or update this project's memory.")
+        else:
+            print_info("No vault connected. Project memory still works locally; set one later with /memory vault <path>.")
+
+    async def cmd_memory(self, sub: str = "", rest: str = "") -> None:
+        """Project memory: show, init, edit, update (model-proposed, confirmed), sync (vault), link, vault."""
+        cfg = self._memory_config()
+        memory = self._memory()
+        if sub in ("", "show"):
+            if not memory.exists():
+                print_info(f"No {cfg.file} in this project yet. /memory init creates one; /memory update fills it from this conversation.")
+                return
+            from thwip.memory import parse_frontmatter, render_frontmatter
+            data, body = parse_frontmatter(memory.read())
+            if data:
+                console.print(Text(render_frontmatter(data), style="dim"))
+            console.print(self._render_response(body))
+            vault = self._vault()
+            console.print(Text(f"File: {memory.path}" + (f"  |  Vault: {vault.root}" if vault else "  |  No vault connected (/memory vault <path>)"), style="dim"))
+        elif sub == "init":
+            if memory.exists():
+                print_info(f"{cfg.file} already exists.")
+                return
+            area = rest or "General"
+            memory.init(area=area)
+            print_success(f"Created {memory.path} from the template with detected facts. Edit it or run /memory update.")
+            self._sync_vault(memory)
+        elif sub == "edit":
+            editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+            if not editor:
+                print_error("Set $EDITOR (or $VISUAL) to use /memory edit.")
+                return
+            if not memory.exists():
+                memory.init()
+            import shlex
+            import subprocess
+            await asyncio.to_thread(subprocess.call, [*shlex.split(editor), str(memory.path)])
+            self._sync_vault(memory)
+        elif sub == "update":
+            await self._memory_update()
+        elif sub == "sync":
+            if not memory.exists():
+                print_info("Nothing to file yet; create the memory with /memory init first.")
+                return
+            self._sync_vault(memory, verbose=True)
+        elif sub == "vault":
+            if not rest:
+                vault = self._vault()
+                print_info(f"Vault: {vault.root}" if vault else "No vault connected. Usage: /memory vault <path>")
+                return
+            vault = Vault(rest)
+            try:
+                vault.create()
+            except OSError as exc:
+                print_error(f"Could not use that folder: {exc}")
+                return
+            cfg.vault = str(vault.root)
+            cfg.onboarded = True
+            self.config.save()
+            print_success(f"Vault set to {vault.root}")
+            if memory.exists():
+                self._sync_vault(memory, verbose=True)
+        elif sub == "link":
+            self._memory_link()
+        else:
+            print_info("Usage: /memory [show|init [area]|edit|update|sync|vault <path>|link]")
+
+    def _sync_vault(self, memory: ProjectMemory, verbose: bool = False) -> None:
+        vault = self._vault()
+        if not vault:
+            if verbose:
+                print_info("No vault connected; /memory vault <path> to connect one.")
+            return
+        try:
+            report = vault.sync(memory)
+        except OSError as exc:
+            print_error(f"Vault sync failed: {exc}")
+            return
+        if verbose or report["written"]:
+            written = len(report["written"])
+            print_success(f"Filed in the vault: {written} note{'s' if written != 1 else ''} written or refreshed under {vault.root}.")
+        for path in report["skipped"]:
+            print_warning(f"Left untouched (not created by thwip): {path}")
+
+    def _memory_link(self) -> None:
+        """Point the CLIs' own instruction files at the memory file so they read it outside thwip as well."""
+        cfg = self._memory_config()
+        project = Path(self.session.project_path).resolve()
+        line = f"\nProject memory: read `{cfg.file}` in this directory before working; update only durable facts in it.\n"
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            target = project / name
+            existing = target.read_text(encoding="utf-8") if target.is_file() else ""
+            if cfg.file in existing:
+                print_info(f"{name} already references {cfg.file}.")
+                continue
+            target.write_text(existing.rstrip("\n") + ("\n" if existing else "") + line, encoding="utf-8")
+            print_success(f"Added a pointer to {cfg.file} in {name}.")
+
+    async def _memory_update(self, reason: str = "") -> bool:
+        """Ask the current model to revise the memory file from this conversation; write only after confirmation."""
+        import difflib
+
+        memory = self._memory()
+        portable = self.session.to_portable_messages()
+        if not portable:
+            print_info("No conversation to record yet.")
+            return False
+        if not self.current_agent.is_configured():
+            print_error(f"{self.current_agent.display_name} is not connected; /switch to a ready agent first.")
+            return False
+        if not memory.exists():
+            memory.init()
+            print_info(f"Created {memory.path} from the template first.")
+        transcript = "\n\n".join(f"[{m['role'].title()}]\n{m['content']}" for m in portable)
+        proposed = ""
+        with console.status("[dim]Asking the model to update the project memory...[/dim]"):
+            try:
+                stream = self.current_agent.chat(messages=[{"role": "user", "content": memory.update_prompt(transcript)}],
+                                                 model=self.session.current_model,
+                                                 system_prompt="You maintain concise, factual project memory files.", tools=None, stream=False)
+                async with contextlib.aclosing(stream) if hasattr(stream, "aclose") else contextlib.nullcontext(stream) as stream:
+                    async for event in stream:
+                        if isinstance(event, TextDelta):
+                            proposed += event.content
+                        elif isinstance(event, LimitHit):
+                            print_warning(f"Provider limit while updating memory: {event.message}")
+                            return False
+            except TurnInterrupted:
+                raise
+            except Exception as exc:
+                print_error(f"Memory update failed: {exc}")
+                return False
+        proposed = proposed.strip()
+        if proposed.startswith("```"):
+            proposed = re.sub(r"^```[a-zA-Z]*\n|\n```$", "", proposed).strip()
+        if not proposed.startswith("---") or "## Current Work" not in proposed:
+            print_error("The model did not return a valid memory file; nothing written.")
+            return False
+        current = memory.read()
+        proposed = memory.touch_updated(proposed)
+        diff = list(difflib.unified_diff(current.splitlines(), proposed.splitlines(), "current", "proposed", lineterm=""))
+        if not diff:
+            print_info("The model proposed no changes to the project memory.")
+            return False
+        from rich.syntax import Syntax
+        console.print(Syntax("\n".join(diff[:400]), "diff", theme="ansi_dark", word_wrap=False))
+        if len(diff) > 400:
+            print_info("Diff truncated for display; the full file is written if you accept.")
+        if not await self._ask_yes_no(f"Write these changes to {memory.filename}? [y/N]"):
+            print_info("Project memory unchanged.")
+            return False
+        memory.write(proposed)
+        print_success(f"Project memory updated: {memory.path}")
+        self._sync_vault(memory)
+        return True
+
+    async def _offer_memory_update(self, reason: str) -> None:
+        cfg = self._memory_config()
+        if not cfg.enabled or not cfg.offer_update_on_quit or len(self.session.to_portable_messages()) < 2:
+            return
+        if not sys.stdin.isatty() or not self.current_agent.is_configured():
+            return
+        if await self._ask_yes_no(f"Update this project's memory ({cfg.file}) from the conversation before {reason}? [y/N]"):
+            await self._memory_update(reason)
+
     def cmd_show_about(self) -> None:
         """Display the complete About section and navigation guide."""
         detected = len(self.detector.scan_all())
@@ -756,6 +991,7 @@ class ThwipCLI:
             ("/export [path]", "Write the conversation to a Markdown file with model attribution"),
             ("!<command>", "Run a shell command in the project without a model"),
             ("@path in a message", "Attach a project file's content to your message"),
+            ("/memory [show|init|edit|update|sync|vault|link]", "Project memory file shared by every agent, filed into your second-brain vault"),
             ("/session save [name]", "Save current chat session"),
             ("/session load <name>", "Load a previously saved session"),
             ("/session list", "List all saved sessions"),
@@ -1372,7 +1608,7 @@ class ThwipCLI:
             with Live(console=console, refresh_per_second=12) as live:
                 try:
                     chat_kwargs = {"messages": working_messages, "model": self.session.current_model,
-                                   "system_prompt": self.session.system_prompt, "tools": tools,
+                                   "system_prompt": self._system_prompt_with_memory(), "tools": tools,
                                    "stream": self.config.stream if tools is None else False}
                     if native:
                         chat_kwargs["resume"] = self.session.native_session(self.current_agent.name)
