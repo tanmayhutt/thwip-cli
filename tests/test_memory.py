@@ -208,3 +208,15 @@ async def test_quit_offer_only_with_real_conversation(cli, monkeypatch):
     cli.session.clear_context()
     await cli._offer_memory_update("quitting")
     assert len(asked) == 1
+
+
+def test_card_falls_back_to_snapshot_stack_and_purpose(tmp_path):
+    from thwip.memory import ProjectCard
+
+    project = tmp_path / "legacy"
+    project.mkdir()
+    ProjectMemory(str(project)).write(
+        "---\nproject: legacy\ntype: cli-tool\narea: Developer Tools\nstatus: active\nupdated: 2026-09-08\n---\n\n"
+        "# legacy Context\n\n## Snapshot\n\n- Purpose: Multiplex agents.\n- Stack: Python 3.13, rich, prompt-toolkit, Vite, JavaScript\n")
+    card = ProjectCard.from_memory(ProjectMemory(str(project)))
+    assert card.stack == ["Python", "rich", "prompt-toolkit", "Vite", "JavaScript"] and card.purpose == "Multiplex agents."

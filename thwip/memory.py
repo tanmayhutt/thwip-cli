@@ -98,6 +98,23 @@ def _as_list(value) -> list[str]:
     return []
 
 
+def _snapshot_field(body: str, label: str) -> str:
+    """Value of a `- Label: ...` bullet in the Snapshot section, or empty."""
+    match = re.search(rf"^\s*-\s*{re.escape(label)}\s*:\s*(.+)$", body, re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
+def _stack_from_body(body: str) -> list[str]:
+    """Stack entries from a `- Stack: Python 3.13, rich, Vite` bullet; version suffixes are dropped."""
+    raw = _snapshot_field(body, "Stack")
+    items = []
+    for part in re.split(r",|;|\band\b|/", raw):
+        name = re.sub(r"\s+[\d.]+(\+)?$", "", part.strip().strip("`."))
+        if name and name.lower() not in {"none", "not detected", "n/a", "tbd"} and name not in items:
+            items.append(name)
+    return items[:12]
+
+
 # --- project memory ------------------------------------------------------
 
 @dataclass
@@ -218,10 +235,12 @@ class ProjectCard:
 
     @classmethod
     def from_memory(cls, memory: ProjectMemory) -> ProjectCard:
-        data = memory.frontmatter()
+        data, body = parse_frontmatter(memory.read())
+        stack = _as_list(data.get("stack")) or _stack_from_body(body)
+        purpose = str(data.get("purpose", "")) or _snapshot_field(body, "Purpose")
         return cls(name=str(data.get("project") or memory.name()), context_path=str(memory.path),
-                   area=str(data.get("area", "")), stack=_as_list(data.get("stack")), tags=_as_list(data.get("tags")),
-                   status=str(data.get("status", "")), purpose=str(data.get("purpose", "")), updated=str(data.get("updated", "")))
+                   area=str(data.get("area", "")), stack=stack, tags=_as_list(data.get("tags")),
+                   status=str(data.get("status", "")), purpose=purpose, updated=str(data.get("updated", "")))
 
     def shares_with(self, other: ProjectCard) -> list[str]:
         shared = []

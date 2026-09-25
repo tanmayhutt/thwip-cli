@@ -1,7 +1,7 @@
 # Verification status
 
-Verified locally on 2026-09-24 for v1.8.0. The Python suite
-passes 282 offline tests on Python 3.11, 3.12, and 3.13. Exhaustive behavior across every provider and
+Verified locally on 2026-09-25 for v1.8.1. The Python suite
+passes 283 offline tests on Python 3.11, 3.12, and 3.13. Exhaustive behavior across every provider and
 configuration has not been established.
 
 ## Native CLI connections (2026-09-24)
@@ -19,6 +19,7 @@ each using its existing sign-in. No API keys were configured.
 | Ctrl+C during a response | Turn cancelled, child process terminated, REPL continued, unanswered message removed |
 | Ctrl+C at a Codex permission prompt | Turn cancelled, no file created, no leftover process, REPL continued |
 | Usage-limit failover | With a test-only shim making Codex report "You've hit your usage limit", the real REPL showed the alternatives, switched to Claude Code on `1`, retried the message, and answered; history held one clean pair |
+| Real vault connection (v1.8.1) | Onboarding in the thwip project chose the real Obsidian vault; `/memory sync` wrote nothing and reported the three hand-written notes it left untouched; stack and purpose now fall back to the Snapshot body so existing context files link by stack |
 | Project memory and vault (v1.8.0) | Live in a temp project with a temp config and vault: first-run onboarding listed the real Obsidian vault and accepted a typed path; `/memory init` detected the stack and filed card, hub, and dashboard notes; a Codex turn received the memory as instructions; `/memory update` produced a diff written only after `y`; `/status` and the quit-time offer behaved. Offline: frontmatter, template init, injection bounds, Obsidian registry detection, vault sync with related links and hand-written-note protection, update flow, invalid model output rejection, onboarding choices |
 | Warm native sessions (v1.7.0) | Live: Claude Code recalled a code word on its second turn through `--resume`; Codex received the full transcript on first switch and answered from it; returning to Claude delivered a catch-up block; a second Codex turn reused the running app-server; `/status` showed each CLI session ID and synced count; `/new` cleared them; no leftover processes. Offline: resume, catch-up, and fallback paths for Codex, Claude Code, and Antigravity; session record validation and persistence |
 | Manual page (v1.7.0) | `thwip install-man` then `man -w thwip` and `man thwip` resolve from `~/.local/share/man` |
