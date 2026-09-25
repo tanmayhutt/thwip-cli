@@ -317,6 +317,8 @@ class Vault:
             if MARKER not in text[:600]:
                 continue
             data, _ = parse_frontmatter(text)
+            if "project" not in data:
+                continue  # the dashboard and hub notes also carry the marker
             found.append(ProjectCard(name=str(data.get("project", note.stem)), context_path=str(data.get("context_path", "")),
                                      area=str(data.get("area", "")), stack=_as_list(data.get("stack")), tags=_as_list(data.get("tags")),
                                      status=str(data.get("status", "")), purpose=str(data.get("purpose", "")), updated=str(data.get("updated", ""))))
@@ -366,8 +368,10 @@ class Vault:
         }), "", f"# {card.name}", ""]
         if card.purpose:
             lines += [card.purpose, ""]
+        context = Path(card.context_path) if card.context_path else None
+        link = f"[context file]({context.as_uri()})" if context and context.is_absolute() else f"context file `{card.context_path or 'unknown'}`"
         lines += ["## Technical source", "",
-                  (f"Current work, decisions, and history live in the project's [context file]({Path(card.context_path).as_uri()}). "
+                  (f"Current work, decisions, and history live in the project's {link}. "
                   "This card is a stable index entry maintained by thwip; do not put changing detail here."), ""]
         if card.area or card.stack or card.tags:
             lines += ["## Links", ""]

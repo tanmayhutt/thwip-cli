@@ -810,7 +810,7 @@ class ThwipCLI:
             return
         try:
             report = vault.sync_all(memories)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             print_error(f"Vault sync failed: {exc}")
             return
         print_success(f"Filed {report['projects']} projects from {', '.join(roots)}: {len(report['written'])} notes written or refreshed "
@@ -826,7 +826,7 @@ class ThwipCLI:
             return
         try:
             report = vault.sync(memory)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             print_error(f"Vault sync failed: {exc}")
             return
         if verbose or report["written"]:

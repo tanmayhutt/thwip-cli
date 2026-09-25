@@ -1,6 +1,6 @@
 # Verification status
 
-Verified locally on 2026-09-25 for v1.9.0. The Python suite
+Verified locally on 2026-09-25 for v1.9.1. The Python suite
 passes 286 offline tests on Python 3.11, 3.12, and 3.13. Exhaustive behavior across every provider and
 configuration has not been established.
 
