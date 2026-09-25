@@ -249,3 +249,19 @@ def test_sync_all_discovers_projects_and_files_cards_in_a_subfolder(tmp_path):
     assert "[[Projects/thwip/Stack/Python|Python]]" in alpha, "hub links point into thwip's own folder"
     assert (tmp_path / "brain" / "Projects" / "thwip" / "Dashboard.md").is_file(), "dashboard goes in the cards folder when it is not Projects/"
     assert not (tmp_path / "brain" / "Projects.md").exists() and not (tmp_path / "brain" / "Stack").exists()
+
+
+def test_rebuild_tolerates_cards_without_a_context_path(tmp_path):
+    from thwip.memory import Vault
+
+    vault = Vault(str(tmp_path / "brain"), cards_dir="Projects/thwip")
+    vault.create()
+    (vault.cards_root / "old.md").write_text("---\nproject: old\ngenerated_by: thwip\n---\n\n# old\n")
+    project = tmp_path / "fresh"
+    project.mkdir()
+    ProjectMemory(str(project)).write("---\nproject: fresh\narea: X\n---\n\n# fresh\n")
+    report = vault.sync_all([ProjectMemory(str(project))])
+    assert any(path.endswith("fresh.md") for path in report["written"])
+    assert "context file `unknown`" in (vault.cards_root / "old.md").read_text()
+    report = vault.sync_all([ProjectMemory(str(project))])
+    assert [c.name for c in vault.cards()] == ["fresh", "old"], "Dashboard.md is not treated as a project card"
