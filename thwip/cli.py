@@ -675,8 +675,8 @@ class ThwipCLI:
         return ProjectMemory(self.session.project_path, self._memory_config().file)
 
     def _vault(self) -> Vault | None:
-        path = self._memory_config().vault
-        return Vault(path) if path else None
+        cfg = self._memory_config()
+        return Vault(cfg.vault, getattr(cfg, "cards_dir", "Projects")) if cfg.vault else None
 
     def _system_prompt_with_memory(self) -> str:
         """Base instructions plus the project's memory file, so every provider shares the same project state."""
@@ -767,6 +767,9 @@ class ThwipCLI:
         elif sub == "update":
             await self._memory_update()
         elif sub == "sync":
+            if rest.strip() in {"all", "--all"}:
+                self._sync_all()
+                return
             if not memory.exists():
                 print_info("Nothing to file yet; create the memory with /memory init first.")
                 return
@@ -791,7 +794,29 @@ class ThwipCLI:
         elif sub == "link":
             self._memory_link()
         else:
-            print_info("Usage: /memory [show|init [area]|edit|update|sync|vault <path>|link]")
+            print_info("Usage: /memory [show|init [area]|edit|update|sync [all]|vault <path>|link]")
+
+    def _sync_all(self) -> None:
+        """File every project under the configured scan folders and rebuild the cross-project links."""
+        cfg = self._memory_config()
+        vault = self._vault()
+        if not vault:
+            print_info("No vault connected; /memory vault <path> to connect one.")
+            return
+        roots = list(getattr(cfg, "scan", [])) or [str(Path(self.session.project_path).resolve().parent)]
+        memories = Vault.discover_projects(roots, cfg.file)
+        if not memories:
+            print_info(f"No projects with {cfg.file} found under: {', '.join(roots)}")
+            return
+        try:
+            report = vault.sync_all(memories)
+        except OSError as exc:
+            print_error(f"Vault sync failed: {exc}")
+            return
+        print_success(f"Filed {report['projects']} projects from {', '.join(roots)}: {len(report['written'])} notes written or refreshed "
+                      f"under {vault.cards_root} plus Stack, Areas, and Tags hubs.")
+        for path in report["skipped"]:
+            print_warning(f"Left untouched (not created by thwip): {path}")
 
     def _sync_vault(self, memory: ProjectMemory, verbose: bool = False) -> None:
         vault = self._vault()

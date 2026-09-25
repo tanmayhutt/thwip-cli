@@ -164,9 +164,24 @@ notes are never touched.
 | `/memory sync` | File the project into the vault and refresh hubs and the dashboard |
 | `/memory vault <path>` | Connect or change the vault |
 | `/memory link` | Add a pointer to `AGENTS.md` and `CLAUDE.md` so the CLIs read it outside thwip too |
+| `/memory sync all` | File every project found under the configured `scan` folders and rebuild all cross-project links at once |
 
 When you `/quit` after a real conversation, thwip offers the update once. Settings live under
-`[memory]` in `~/.thwip/config.toml`: `enabled`, `file`, `vault`, `offer_update_on_quit`.
+`[memory]` in `~/.thwip/config.toml`:
+
+```toml
+[memory]
+enabled = true
+file = "context.md"                  # memory file name in each project root
+vault = "/Users/you/Obsidian/Brain"  # chosen at first run; empty means no vault
+offer_update_on_quit = true
+cards_dir = "Projects"               # vault subfolder for thwip's notes
+scan = ["/Users/you/code"]           # folders whose subfolders are projects, for /memory sync all
+```
+
+If your vault already has hand-written project notes under `Projects/`, set `cards_dir` to a
+subfolder such as `Projects/thwip`. thwip's cards, hubs, and dashboard then live inside that
+folder and link among themselves, and your own notes stay untouched.
 
 ## Live model lists
 

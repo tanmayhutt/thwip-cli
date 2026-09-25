@@ -108,9 +108,14 @@ def _stack_from_body(body: str) -> list[str]:
     """Stack entries from a `- Stack: Python 3.13, rich, Vite` bullet; version suffixes are dropped."""
     raw = _snapshot_field(body, "Stack")
     items = []
-    for part in re.split(r",|;|\band\b|/", raw):
-        name = re.sub(r"\s+[\d.]+(\+)?$", "", part.strip().strip("`."))
-        if name and name.lower() not in {"none", "not detected", "n/a", "tbd"} and name not in items:
+    for part in re.split(r",|;|\band\b|/|\(|\)", raw):
+        name = re.sub(r"\s+[\d.]+(\+)?$", "", part.strip().strip("`. "))
+        name = re.sub(r"\s{2,}", " ", name)
+        if not name or len(name) > 40 or not re.search(r"[A-Za-z]", name):
+            continue
+        if re.search(r"\b\d+\s*(MB|GB|KB)\b|\bfolder\b|\bfiles?\b", name, re.IGNORECASE):
+            continue
+        if name.lower() not in {"none", "not detected", "n/a", "tbd", "etc"} and name not in items:
             items.append(name)
     return items[:12]
 
@@ -254,15 +259,52 @@ class ProjectCard:
 class Vault:
     """A folder of Markdown notes. thwip owns only the files it generated."""
 
-    def __init__(self, root: str):
+    def __init__(self, root: str, cards_dir: str = "Projects"):
         self.root = Path(root).expanduser().resolve()
+        self.cards_dir = cards_dir.strip("/") or "Projects"
+
+    @property
+    def cards_root(self) -> Path:
+        return self.root / self.cards_dir
+
+    @property
+    def hubs_root(self) -> Path:
+        """Hub notes sit at the vault root for the default layout, otherwise inside thwip's own folder."""
+        return self.root if self.cards_dir == "Projects" else self.cards_root
+
+    def _hub_link(self, kind: str, value: str) -> str:
+        prefix = "" if self.cards_dir == "Projects" else f"{self.cards_dir}/"
+        return f"[[{prefix}{kind}/{slug(value)}|{value}]]"
 
     def is_ready(self) -> bool:
         return self.root.is_dir()
 
     def create(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        (self.root / "Projects").mkdir(exist_ok=True)
+        self.cards_root.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def discover_projects(scan_roots: list[str], filename: str = "context.md") -> list[ProjectMemory]:
+        """Every direct subfolder of the scan roots that holds a memory file."""
+        found: list[ProjectMemory] = []
+        for root in scan_roots:
+            base = Path(root).expanduser()
+            if not base.is_dir():
+                continue
+            for child in sorted(base.iterdir()):
+                if child.is_dir() and (child / filename).is_file():
+                    found.append(ProjectMemory(str(child), filename))
+        return found
+
+    def sync_all(self, memories: list[ProjectMemory]) -> dict:
+        """File every discovered project, then rebuild hubs and the dashboard from all of them at once."""
+        report = {"written": [], "skipped": [], "projects": 0}
+        for memory in memories:
+            part = self.sync(memory, rebuild=False)
+            report["written"] += part["written"]
+            report["skipped"] += part["skipped"]
+            report["projects"] += 1
+        self._rebuild(self.cards(), report)
+        return report
 
     def _managed(self, path: Path) -> bool:
         return not path.exists() or MARKER in path.read_text(encoding="utf-8")[:600]
@@ -270,7 +312,7 @@ class Vault:
     def cards(self) -> list[ProjectCard]:
         """Every project thwip has filed here, read back from the generated cards."""
         found: list[ProjectCard] = []
-        for note in sorted((self.root / "Projects").glob("*.md")) if (self.root / "Projects").is_dir() else []:
+        for note in sorted(self.cards_root.glob("*.md")) if self.cards_root.is_dir() else []:
             text = note.read_text(encoding="utf-8")
             if MARKER not in text[:600]:
                 continue
@@ -280,30 +322,40 @@ class Vault:
                                      status=str(data.get("status", "")), purpose=str(data.get("purpose", "")), updated=str(data.get("updated", ""))))
         return found
 
-    def sync(self, memory: ProjectMemory) -> dict:
+    def sync(self, memory: ProjectMemory, rebuild: bool = True) -> dict:
         """File the project's card, refresh hub notes and the dashboard, and report what was written or skipped."""
         card = ProjectCard.from_memory(memory)
         others = [c for c in self.cards() if c.name != card.name]
         report = {"written": [], "skipped": []}
-        self._write(self.root / "Projects" / f"{slug(card.name)}.md", self._render_card(card, others), report)
-        everything = [*others, card]
+        self._write(self.cards_root / f"{slug(card.name)}.md", self._render_card(card, others), report)
+        if rebuild:
+            self._rebuild([*others, card], report)
+        return report
+
+    def _rebuild(self, everything: list[ProjectCard], report: dict) -> None:
+        # Cards must know about each other, so re-render every card's related list from the full set.
+        for card in everything:
+            others = [c for c in everything if c.name != card.name]
+            self._write(self.cards_root / f"{slug(card.name)}.md", self._render_card(card, others), report)
         for kind, values in (("Stack", {s for c in everything for s in c.stack}),
                              ("Areas", {c.area for c in everything if c.area}),
                              ("Tags", {t for c in everything for t in c.tags})):
             for value in sorted(values):
                 members = [c for c in everything if value in (c.stack if kind == "Stack" else c.tags if kind == "Tags" else [c.area])]
-                self._write(self.root / kind / f"{slug(value)}.md", self._render_hub(kind, value, members), report)
-        self._write(self.root / "Projects.md", self._render_dashboard(everything), report)
-        return report
+                self._write(self.hubs_root / kind / f"{slug(value)}.md", self._render_hub(kind, value, members), report)
+        dashboard = self.root / "Projects.md" if self.cards_dir == "Projects" else self.cards_root / "Dashboard.md"
+        self._write(dashboard, self._render_dashboard(everything), report)
 
     def _write(self, path: Path, text: str, report: dict) -> None:
         if not self._managed(path):
-            report["skipped"].append(str(path))
+            if str(path) not in report["skipped"]:
+                report["skipped"].append(str(path))
             return
         if path.exists() and path.read_text(encoding="utf-8") == text:
             return
         _atomic_write(path, text)
-        report["written"].append(str(path))
+        if str(path) not in report["written"]:
+            report["written"].append(str(path))
 
     def _render_card(self, card: ProjectCard, others: list[ProjectCard]) -> str:
         related = [(other, card.shares_with(other)) for other in others]
@@ -320,16 +372,16 @@ class Vault:
         if card.area or card.stack or card.tags:
             lines += ["## Links", ""]
             if card.area:
-                lines.append(f"- Area: [[Areas/{slug(card.area)}|{card.area}]]")
+                lines.append(f"- Area: {self._hub_link('Areas', card.area)}")
             for item in card.stack:
-                lines.append(f"- Stack: [[Stack/{slug(item)}|{item}]]")
+                lines.append(f"- Stack: {self._hub_link('Stack', item)}")
             for item in card.tags:
-                lines.append(f"- Tag: [[Tags/{slug(item)}|{item}]]")
+                lines.append(f"- Tag: {self._hub_link('Tags', item)}")
             lines.append("")
         lines += ["## Related projects", ""]
         if related:
             for other, shared in sorted(related, key=lambda pair: -len(pair[1])):
-                lines.append(f"- [[Projects/{slug(other.name)}|{other.name}]]: shares {', '.join(shared)}")
+                lines.append(f"- [[{self.cards_dir}/{slug(other.name)}|{other.name}]]: shares {', '.join(shared)}")
         else:
             lines.append("- None yet. Projects that share a stack, area, or tag will appear here.")
         lines.append("")
@@ -341,7 +393,7 @@ class Vault:
                  f"Projects using this {label.lower()}, filed by thwip:", ""]
         for card in sorted(members, key=lambda c: c.name.lower()):
             detail = f" ({card.status}, updated {card.updated})" if card.status or card.updated else ""
-            lines.append(f"- [[Projects/{slug(card.name)}|{card.name}]]{detail}")
+            lines.append(f"- [[{self.cards_dir}/{slug(card.name)}|{card.name}]]{detail}")
         lines.append("")
         return "\n".join(lines)
 
@@ -349,6 +401,6 @@ class Vault:
         lines = [render_frontmatter({"dashboard": "projects", "generated_by": "thwip", "updated": time.strftime("%Y-%m-%d")}), "",
                  "# Projects", "", "| Project | Area | Status | Stack | Updated |", "|:--|:--|:--|:--|:--|"]
         for card in sorted(cards, key=lambda c: c.name.lower()):
-            lines.append(f"| [[Projects/{slug(card.name)}|{card.name}]] | {card.area} | {card.status} | {', '.join(card.stack)} | {card.updated} |")
+            lines.append(f"| [[{self.cards_dir}/{slug(card.name)}|{card.name}]] | {card.area} | {card.status} | {', '.join(card.stack)} | {card.updated} |")
         lines.append("")
         return "\n".join(lines)

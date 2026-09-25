@@ -212,6 +212,8 @@ class MemoryConfig:
     vault: str = ""                 # Obsidian vault (any Markdown folder); empty until onboarding chooses one
     offer_update_on_quit: bool = True
     onboarded: bool = False         # first-run vault question already answered
+    cards_dir: str = "Projects"     # vault subfolder for thwip's project cards
+    scan: list[str] = field(default_factory=list)  # folders whose subfolders are projects (for /memory sync --all)
 
 
 @dataclass
@@ -286,6 +288,8 @@ class ThwipConfig:
             "fallback": {"enabled": bool, "chain": list},
             "display": {key: type(value) for key, value in vars(self.display).items()},
             "limits": {"warn_at_percent": int, "auto_switch": bool},
+            "memory": {"enabled": bool, "file": str, "vault": str, "offer_update_on_quit": bool,
+                       "onboarded": bool, "cards_dir": str, "scan": list},
         }
         clean = {}
         for section, fields in specs.items():
@@ -294,6 +298,9 @@ class ThwipConfig:
                 continue
             clean[section] = {key: value for key, value in raw.items()
                               if key in fields and type(value) is fields[key]}
+        # Endpoint overrides are free-form provider -> URL pairs.
+        raw_endpoints = data.get("endpoints", {})
+        clean["endpoints"] = {str(k): v for k, v in raw_endpoints.items() if isinstance(v, str)} if isinstance(raw_endpoints, dict) else {}
         raw_keys = data.get("keys", {})
         clean["keys"] = {key: value for key, value in raw_keys.items()
                          if isinstance(value, str) and value.strip()} if isinstance(raw_keys, dict) else {}
@@ -346,6 +353,10 @@ class ThwipConfig:
                 self.memory.offer_update_on_quit = memory["offer_update_on_quit"]
             if isinstance(memory.get("onboarded"), bool):
                 self.memory.onboarded = memory["onboarded"]
+            if isinstance(memory.get("cards_dir"), str) and memory["cards_dir"].strip().strip("/"):
+                self.memory.cards_dir = memory["cards_dir"].strip().strip("/")
+            if isinstance(memory.get("scan"), list):
+                self.memory.scan = [str(item) for item in memory["scan"] if isinstance(item, str) and item.strip()]
 
         # Endpoint overrides: [endpoints] openai = "https://proxy.example/v1"
         endpoints = data.get("endpoints", {})
@@ -405,6 +416,8 @@ class ThwipConfig:
                 "vault": self.memory.vault,
                 "offer_update_on_quit": self.memory.offer_update_on_quit,
                 "onboarded": self.memory.onboarded,
+                "cards_dir": self.memory.cards_dir,
+                "scan": list(self.memory.scan),
             },
             "fallback": {
                 "enabled": self.fallback.enabled,
