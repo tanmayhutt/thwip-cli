@@ -103,6 +103,13 @@ class QuietTerminal:
         return False
 
 
+def pretty_path(path) -> str:
+    """Show paths relative to the home directory so panels stop wrapping."""
+    text = str(path)
+    home = str(Path.home())
+    return "~" + text[len(home):] if text.startswith(home + os.sep) or text == home else text
+
+
 class TurnInterrupted(Exception):
     """Raised when the user presses Ctrl+C at a prompt shown during a turn."""
 
@@ -123,6 +130,8 @@ class ThwipCLI:
         self.config = ThwipConfig.load()
         if project:
             self.config.project = project
+        # Sessions and memory files are keyed by project; never let that depend on the current directory later.
+        self.config.project = os.path.abspath(os.path.expanduser(self.config.project or "."))
         self.registry = AgentRegistry(self.config)
         self.detector = SystemDetector()
         self.usage_tracker = UsageTracker()
@@ -260,7 +269,12 @@ class ThwipCLI:
                     await self._run_interruptible(self.process_user_message(self._expand_mentions(user_input)))
 
             except (KeyboardInterrupt, EOFError):
-                console.print("\n[dim]Exiting thwip. Goodbye![/dim]")
+                console.print()
+                try:
+                    await self._run_interruptible(self._offer_memory_update("quitting"))
+                except (KeyboardInterrupt, EOFError):
+                    pass
+                console.print("[dim]Exiting thwip. Goodbye![/dim]")
                 break
             except Exception as e:
                 print_error(f"Unexpected error: {e}")
@@ -462,6 +476,7 @@ class ThwipCLI:
         if not agent.get_model_info(loaded.current_model):
             loaded.current_model = agent.get_default_model()
             print_warning("The saved model is unavailable. Using the provider default.")
+        loaded.project_path = str(project)
         self.session = loaded
         self.current_agent = agent
         self.tool_manager = ToolManager(str(project))
@@ -503,11 +518,13 @@ class ThwipCLI:
         print_success(f"Started new session {self.session.name}.")
 
     async def cmd_resume(self, name: str = "") -> None:
-        """Resume a saved session by name or from a numbered list, like /resume in Codex and Claude Code."""
+        """Resume a saved session by name, by list number, or from a numbered list, like /resume in Codex and Claude Code."""
+        sessions = Session.list_saved_sessions()
         if name:
+            if name.isdigit() and sessions and 1 <= int(name) <= len(sessions):
+                name = sessions[int(name) - 1]["name"]
             self._load_session(name)
             return
-        sessions = Session.list_saved_sessions()
         if not sessions:
             print_info("No saved sessions found.")
             return
@@ -719,14 +736,14 @@ class ThwipCLI:
             try:
                 vault.create()
             except OSError as exc:
-                print_error(f"Could not create the vault folder: {exc}")
+                print_error(f"Could not create the vault folder at {pretty_path(chosen)}: {exc}")
                 chosen = ""
         cfg.vault = chosen
         cfg.onboarded = True
         with contextlib.suppress(Exception):
             self.config.save()
         if chosen:
-            print_success(f"Second brain connected: {chosen}. Use /memory to view or update this project's memory.")
+            print_success(f"Second brain connected: {pretty_path(chosen)}. Use /memory in any project to view or update its memory.")
         else:
             print_info("No vault connected. Project memory still works locally; set one later with /memory vault <path>.")
 
@@ -744,14 +761,16 @@ class ThwipCLI:
                 console.print(Text(render_frontmatter(data), style="dim"))
             console.print(self._render_response(body))
             vault = self._vault()
-            console.print(Text(f"File: {memory.path}" + (f"  |  Vault: {vault.root}" if vault else "  |  No vault connected (/memory vault <path>)"), style="dim"))
+            console.print(Text(f"File: {pretty_path(memory.path)}" + (f"  |  Vault: {pretty_path(vault.root)}" if vault else "  |  No vault connected (/memory vault <path>)"), style="dim"))
         elif sub == "init":
             if memory.exists():
                 print_info(f"{cfg.file} already exists.")
                 return
             area = rest or "General"
             memory.init(area=area)
-            print_success(f"Created {memory.path} from the template with detected facts. Edit it or run /memory update.")
+            detected = memory.frontmatter().get("stack") or []
+            found = f" ({', '.join(detected)} detected)" if detected else ""
+            print_success(f"Created {cfg.file}{found}. Edit it, or run /memory update after a conversation.")
             self._sync_vault(memory)
         elif sub == "edit":
             editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
@@ -831,7 +850,7 @@ class ThwipCLI:
             return
         if verbose or report["written"]:
             written = len(report["written"])
-            print_success(f"Filed in the vault: {written} note{'s' if written != 1 else ''} written or refreshed under {vault.root}.")
+            print_success(f"Filed in the vault ({written} note{'s' if written != 1 else ''} refreshed under {pretty_path(vault.cards_root)}).")
         for path in report["skipped"]:
             print_warning(f"Left untouched (not created by thwip): {path}")
 
@@ -903,7 +922,7 @@ class ThwipCLI:
             print_info("Project memory unchanged.")
             return False
         memory.write(proposed)
-        print_success(f"Project memory updated: {memory.path}")
+        print_success(f"Project memory updated: {pretty_path(memory.path)}")
         self._sync_vault(memory)
         return True
 
@@ -1063,7 +1082,7 @@ class ThwipCLI:
              f"{report.excluded_tool_calls} stored tool-call entries")),
             ("Transient results", f"{report.observed_tool_results} observed tool results not transferred"),
             ("Tracking coverage", "Since session creation" if report.tracking_complete
-             else "Partial: legacy session has uncounted earlier tool results"),
+             else "Partial: native CLI tool activity is not counted"),
             ("Capabilities lost", ", ".join(report.lost_capabilities) or "None in local catalog"),
             ("Capabilities gained", ", ".join(report.gained_capabilities) or "None in local catalog"),
             ("Context pressure", (f"{report.context_pressure}: ~{report.estimated_input_tokens:,} input "
@@ -1148,26 +1167,27 @@ class ThwipCLI:
 
         old_agent = self.current_agent
         old_caps = old_agent.get_capabilities_for_model(self.session.current_model)
-
-        self.cmd_handoff(new_agent.name, chosen_model)
+        carried = len(self.session.to_portable_messages())
 
         self.current_agent = new_agent
         self.session.switch_agent(new_agent.name, chosen_model)
 
-        # Capability comparison & disclaimer
+        # Only interrupt with the capability panel when something is actually lost; /handoff has the full report.
         new_capabilities = new_agent.get_capabilities_for_model(chosen_model)
         missing = [
             capability.display_name
             for capability in sorted(old_caps - new_capabilities, key=lambda item: item.value)
         ]
-        console.print(
-            render_capability_disclaimer(
-                agent_name=new_agent.display_name,
-                company=new_agent.company,
-                supported=[c.display_name for c in new_capabilities],
-                unsupported=missing,
+        if missing:
+            console.print(
+                render_capability_disclaimer(
+                    agent_name=new_agent.display_name,
+                    company=new_agent.company,
+                    supported=[c.display_name for c in new_capabilities],
+                    unsupported=missing,
+                )
             )
-        )
+        carried_text = f"{carried} message{'s' if carried != 1 else ''} carried over" if carried else "fresh conversation"
 
         if not new_agent.is_configured():
             key_name = {
@@ -1184,15 +1204,11 @@ class ThwipCLI:
                 f"  Or add it to ~/.thwip/config.toml"
             )
         elif getattr(new_agent, "native_tools", False):
-            print_success(
-                f"Now chatting with {new_agent.display_name} ({chosen_model}) through its existing sign-in. "
-                "Portable text history preserved."
-            )
+            print_success(f"Now chatting with {new_agent.display_name} ({chosen_model}) through its existing sign-in; "
+                          f"{carried_text}. /handoff shows the full transfer report.")
         else:
-            print_success(
-                f"Now chatting with {new_agent.display_name} ({chosen_model}). "
-                "Portable text history preserved."
-            )
+            print_success(f"Now chatting with {new_agent.display_name} ({chosen_model}); {carried_text}. "
+                          "/handoff shows the full transfer report.")
 
     def cmd_show_agents(self) -> None:
         """Show table of all detected agents."""
@@ -1408,7 +1424,7 @@ class ThwipCLI:
         content = Text()
         content.append(f"Agent:       {self.current_agent.display_name} ({self.current_agent.company})\n", style=brand.label_style)
         content.append(f"Model:       {self.session.current_model}\n", style="bold white")
-        content.append(f"Project:     {os.path.abspath(self.session.project_path)}\n", style="white")
+        content.append(f"Project:     {pretty_path(os.path.abspath(self.session.project_path))}\n", style="white")
         content.append(f"Session:     {self.session.name} ({len(self.session.messages)} messages)\n", style="white")
         content.append(f"Tokens:      {self.session.get_total_tokens():,} used\n", style="dim")
         if getattr(self.current_agent, "native_tools", False):
@@ -1419,7 +1435,8 @@ class ThwipCLI:
                 content.append(f"CLI session: {record['id']} (has seen {record['synced']} messages; only new ones are sent)\n", style="dim")
             else:
                 content.append("CLI session: none yet; the first message sends the full conversation\n", style="dim")
-        content.append(f"Config Key:  {self.config.key_sources.get(self.current_agent.name, 'None')}\n", style="dim")
+        if not getattr(self.current_agent, "native_tools", False):
+            content.append(f"Config Key:  {self.config.key_sources.get(self.current_agent.name, 'None')}\n", style="dim")
 
         console.print(Panel(content, title="Current Status", box=box.ROUNDED))
 
