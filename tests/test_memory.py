@@ -220,3 +220,32 @@ def test_card_falls_back_to_snapshot_stack_and_purpose(tmp_path):
         "# legacy Context\n\n## Snapshot\n\n- Purpose: Multiplex agents.\n- Stack: Python 3.13, rich, prompt-toolkit, Vite, JavaScript\n")
     card = ProjectCard.from_memory(ProjectMemory(str(project)))
     assert card.stack == ["Python", "rich", "prompt-toolkit", "Vite", "JavaScript"] and card.purpose == "Multiplex agents."
+    from thwip.memory import _stack_from_body
+    assert _stack_from_body("- Stack: Arduino (C++), 345 MB folder, ESP32-S3 and Python 3.12") == ["Arduino", "C++", "ESP32-S3", "Python"]
+
+
+def test_sync_all_discovers_projects_and_files_cards_in_a_subfolder(tmp_path):
+    from thwip.memory import Vault
+
+    roots = tmp_path / "Developer" / "Projects"
+    for name, stack in (("alpha", "Python, Vite"), ("beta", "Python"), ("gamma", "Rust")):
+        (roots / name).mkdir(parents=True)
+        (roots / name / "context.md").write_text(
+            f"---\nproject: {name}\narea: Developer Tools\nstatus: active\nupdated: 2026-09-25\n---\n\n# {name} Context\n\n## Snapshot\n\n- Stack: {stack}\n")
+    (roots / "no-memory").mkdir()
+    vault = Vault(str(tmp_path / "brain"), cards_dir="Projects/thwip")
+    vault.create()
+    (tmp_path / "brain" / "Projects" / "alpha.md").write_text("# hand-written alpha card\n")
+    memories = Vault.discover_projects([str(roots), str(tmp_path / "missing")])
+    assert [m.name() for m in memories] == ["alpha", "beta", "gamma"]
+    report = vault.sync_all(memories)
+    assert report["projects"] == 3 and report["skipped"] == []
+    assert (tmp_path / "brain" / "Projects" / "alpha.md").read_text() == "# hand-written alpha card\n", "user notes untouched"
+    alpha = (tmp_path / "brain" / "Projects" / "thwip" / "alpha.md").read_text()
+    assert "[[Projects/thwip/beta|beta]]: shares area Developer Tools, stack Python" in alpha
+    assert "[[Projects/thwip/gamma|gamma]]: shares area Developer Tools" in alpha
+    hub = (tmp_path / "brain" / "Projects" / "thwip" / "Stack" / "Python.md").read_text()
+    assert "[[Projects/thwip/alpha|alpha]]" in hub and "[[Projects/thwip/beta|beta]]" in hub and "gamma" not in hub
+    assert "[[Projects/thwip/Stack/Python|Python]]" in alpha, "hub links point into thwip's own folder"
+    assert (tmp_path / "brain" / "Projects" / "thwip" / "Dashboard.md").is_file(), "dashboard goes in the cards folder when it is not Projects/"
+    assert not (tmp_path / "brain" / "Projects.md").exists() and not (tmp_path / "brain" / "Stack").exists()
