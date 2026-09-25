@@ -170,6 +170,8 @@ class ProjectMemory:
             stack=", ".join(facts["stack"]), stack_text=", ".join(facts["stack"]) or "not detected",
             tags=", ".join(tags or []), entry_points=facts["entry_points"], runtime=facts["runtime"],
         )
+        # The format says: do not add empty fields.
+        text = "\n".join(line for line in text.splitlines() if line.strip() not in {"tags: []", "stack: []"}) + "\n"
         self.write(text)
         return text
 

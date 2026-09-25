@@ -266,3 +266,14 @@ async def test_failover_chain_model_must_be_listed_by_provider(cli, monkeypatch)
     cli.current_agent = cli.registry.get_agent('openai')
     await cli.handle_limit_failover(LimitHit(error_type=LimitStatus.QUOTA_EXHAUSTED, message='usage limit'), {'openai'})
     assert switched == [('claude', 'fable')]
+
+
+def test_cli_stores_absolute_project_paths(tmp_path, monkeypatch):
+    """A relative project path saved into a session made /memory depend on the current directory after /resume."""
+    monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.chdir(tmp_path)
+    from thwip import cli as cli_module
+
+    monkeypatch.setattr(cli_module.ThwipConfig, "load", classmethod(lambda cls: ThwipConfig(project=".")))
+    cli = cli_module.ThwipCLI()
+    assert cli.session.project_path == str(tmp_path) and cli.config.project == str(tmp_path)

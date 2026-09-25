@@ -160,13 +160,12 @@ async def test_switch_previews_before_mutating(tmp_path, monkeypatch):
     calls = []
 
     def preview(*args):
-        assert cli.current_agent is source
         calls.append(args)
 
     monkeypatch.setattr(cli, "cmd_handoff", preview)
     await cli.cmd_switch("offline", "test-model")
-    assert calls == [("offline", "test-model")]
-    assert cli.current_agent is target
+    assert calls == [], "/switch no longer prints the full handoff table; /handoff does"
+    assert cli.current_agent is target and cli.session.current_agent == "offline"
 
 
 @pytest.mark.parametrize("command", ["/clear", "/session clear"])

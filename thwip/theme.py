@@ -20,6 +20,12 @@ from rich.theme import Theme
 
 from thwip import __version__
 
+
+def _pretty(path: str) -> str:
+    from pathlib import Path
+    home = str(Path.home())
+    return '~' + path[len(home):] if path.startswith(home + '/') or path == home else path
+
 # ---------------------------------------------------------------------------
 # Company / Provider Brand Colors
 # ---------------------------------------------------------------------------
@@ -155,7 +161,7 @@ def render_startup_banner(
     lines.append("  Model:       ", style="dim")
     lines.append(f"{model}\n", style="bold white")
     lines.append("  Workspace:   ", style="dim")
-    lines.append(f"{project_path}\n", style="white")
+    lines.append(f"{_pretty(project_path)}\n", style="white")
     lines.append("  Session:     ", style="dim")
     lines.append(f"{session_name}\n", style="white")
     lines.append("  Environment: ", style="dim")

@@ -287,4 +287,5 @@ class Session:
                 })
             except Exception:
                 continue
-        return sorted(result, key=lambda x: x["updated_at"], reverse=True)
+        # Newest first; ties broken by name so numbered picks stay stable between calls.
+        return sorted(result, key=lambda x: (x["updated_at"], x["name"]), reverse=True)
