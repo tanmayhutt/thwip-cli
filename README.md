@@ -166,6 +166,16 @@ notes are never touched.
 | `/memory link` | Add a pointer to `AGENTS.md` and `CLAUDE.md` so the CLIs read it outside thwip too |
 | `/memory sync all` | File every project found under the configured `scan` folders and rebuild all cross-project links at once |
 
+**How the memory reaches the model.** The file is split into sections at its headings. The head
+(frontmatter, Snapshot, Current Work) always goes. The rest is ranked against your current message
+with BM25, the keyword-ranking formula used by search engines, and the best-matching sections are
+added within a character budget. A warm native session is only sent sections it has not already
+seen, as an excerpt attached to the message. Nothing is truncated from the top any more; a note
+says how many sections were left out so the model can ask. No embeddings, no vector database:
+at a few dozen sections per project that would add a dependency without adding recall. The
+`memory-deep-recall` evaluation task measures this against the old first-8,000-characters behaviour
+(`python -m thwip.evals --memory truncate`).
+
 When you `/quit` after a real conversation, thwip offers the update once. Settings live under
 `[memory]` in `~/.thwip/config.toml`:
 
@@ -198,8 +208,9 @@ python -m thwip.evals --provider openai --task tool-read-file
 ```
 
 Each task names the file it tests: the streaming event contract in `agents/base.py`, exact
-instruction following, a tool round trip and the path guard in `tools/`, and the consistency of
-the OpenAI and Anthropic tool schemas. Native CLIs bring their own tools, so for them the tool
+instruction following, a tool round trip and the path guard in `tools/`, the consistency of
+the OpenAI and Anthropic tool schemas, deep recall from a long project memory file, and recall
+across a provider handoff. Native CLIs bring their own tools, so for them the tool
 tasks score the final answer only and say so in the note.
 
 ## Live model lists

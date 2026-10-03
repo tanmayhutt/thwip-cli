@@ -197,12 +197,14 @@ class PrintAgent(BaseAgent):
             command += ["--conversation", resume_id]
         return command, None
 
-    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None):
+    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None, memory_note=""):
         chosen = model or self.get_default_model()
         resume_id = resume.get("id") if isinstance(resume, dict) else None
         synced = resume.get("synced", 0) if isinstance(resume, dict) else 0
         if resume_id:
             prompt, _full = build_incremental_prompt(messages, None if self.name == "claude" else system_prompt, synced)
+            if memory_note:
+                prompt = f"{prompt}\n\n{memory_note}"
             try:
                 async for event in self._turn(prompt, chosen, system_prompt, resume_id=resume_id, new_id=None):
                     yield event
@@ -212,6 +214,8 @@ class PrintAgent(BaseAgent):
                 yield NativeActivity(description=f"Previous {self.display_name} session unavailable "
                                                  f"({scrub(str(exc), 120)}); sending the full conversation to a new one.")
         prompt, _full = build_incremental_prompt(messages, None if self.name == "claude" else system_prompt, 0)
+        if memory_note:
+            prompt = f"{prompt}\n\n{memory_note}"
         async for event in self._turn(prompt, chosen, system_prompt, resume_id=None, new_id=str(uuid.uuid4())):
             yield event
 

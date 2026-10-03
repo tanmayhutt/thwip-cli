@@ -19,6 +19,7 @@ from typing import Any
 
 from thwip.agents.base import AgentDone, LimitHit, NativeActivity, TextDelta, ToolUseStart
 from thwip.evals.tasks import EvalTask, Observation
+from thwip.memory import ProjectMemory
 from thwip.tools import ToolManager
 from thwip.utils import estimate_cost
 
@@ -42,6 +43,8 @@ class EvalResult:
     rounds: int = 0
     error: str = ""
     answer: str = ""          # first 200 characters of the final text, for transparency
+    memory_chars: int = 0     # characters of project memory sent (0 when the task carries none)
+    memory_mode: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -59,9 +62,10 @@ def _materialize(fixture: dict[str, str]) -> Path:
     return project
 
 
-async def run_task(agent, task: EvalTask, model: str | None = None) -> EvalResult:
+async def run_task(agent, task: EvalTask, model: str | None = None, memory_mode: str = "retrieve") -> EvalResult:
+    """memory_mode is "retrieve" (query-aware sections) or "truncate" (the first 8,000 characters), for before/after runs."""
     chosen = model or agent.get_default_model()
-    result = EvalResult(task_id=task.id, provider=agent.name, model=chosen, passed=False)
+    result = EvalResult(task_id=task.id, provider=agent.name, model=chosen, passed=False, memory_mode=memory_mode if task.use_memory else "")
     project = _materialize(task.fixture)
     manager = ToolManager(str(project))
     observation = Observation()
@@ -80,13 +84,18 @@ async def run_task(agent, task: EvalTask, model: str | None = None) -> EvalResul
                 else manager.get_openai_tools()
         if getattr(agent, "native_tools", False):
             tools = None  # native CLIs bring their own tools; we can only observe their final text
-        messages: list[dict[str, Any]] = [{"role": "user", "content": task.prompt}]
+        system_prompt = task.system_prompt
+        if task.use_memory:
+            injection = ProjectMemory(str(project)).injection(task.prompt, mode=memory_mode)
+            system_prompt = f"{system_prompt}\n\n{injection}".strip()
+            result.memory_chars = len(injection)
+        messages: list[dict[str, Any]] = [*task.history, {"role": "user", "content": task.prompt}]
         for round_index in range(MAX_TOOL_ROUNDS):
             result.rounds = round_index + 1
             requests: list[ToolUseStart] = []
             round_text = ""
             native_state: dict = {}
-            async for event in agent.chat(messages=messages, model=chosen, system_prompt=task.system_prompt,
+            async for event in agent.chat(messages=messages, model=chosen, system_prompt=system_prompt,
                                           tools=tools, stream=tools is None):
                 observation.events.append(event)
                 if isinstance(event, TextDelta):
@@ -147,7 +156,7 @@ async def run_task(agent, task: EvalTask, model: str | None = None) -> EvalResul
     return result
 
 
-async def run_suite(agents: list, tasks: list[EvalTask]) -> list[EvalResult]:
+async def run_suite(agents: list, tasks: list[EvalTask], memory_mode: str = "retrieve") -> list[EvalResult]:
     results: list[EvalResult] = []
     system_tasks = [t for t in tasks if t.kind == "system"]
     model_tasks = [t for t in tasks if t.kind != "system"]
@@ -157,7 +166,7 @@ async def run_suite(agents: list, tasks: list[EvalTask]) -> list[EvalResult]:
     try:
         for agent in agents:
             for task in model_tasks:
-                results.append(await run_task(agent, task))
+                results.append(await run_task(agent, task, memory_mode=memory_mode))
     finally:
         # Native adapters keep a CLI process alive between turns; never leave it running after a run.
         for agent in agents:

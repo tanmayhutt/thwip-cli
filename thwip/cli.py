@@ -695,13 +695,33 @@ class ThwipCLI:
         cfg = self._memory_config()
         return Vault(cfg.vault, getattr(cfg, "cards_dir", "Projects")) if cfg.vault else None
 
-    def _system_prompt_with_memory(self) -> str:
-        """Base instructions plus the project's memory file, so every provider shares the same project state."""
+    def _system_prompt_with_memory(self, query: str | None = None) -> str:
+        """Base instructions plus the parts of the project's memory file relevant to this message."""
         base = self.session.system_prompt or ""
         if not self._memory_config().enabled:
             return base
-        injection = self._memory().injection()
+        injection = self._memory().injection(query)
         return f"{base}\n\n{injection}".strip() if injection else base
+
+    def _memory_plan(self, text: str, native: bool) -> tuple[str, list[str]]:
+        """Decide what project memory this turn carries and which chunk ids the native session will then hold.
+
+        Direct API adapters are stateless, so the system prompt carries the relevant sections every turn.
+        A warm native session already holds what it was given before, so it receives only new relevant
+        sections, appended to the message as an excerpt.
+        """
+        if not self._memory_config().enabled or not self._memory().exists():
+            return "", []
+        memory = self._memory()
+        record = self.session.native_session(self.current_agent.name) if native else None
+        if not native or not record:
+            return "", [chunk.id for chunk in memory.select(text)]
+        sent = set(record.get("chunks", []))
+        fresh = memory.excerpt(text, exclude=sent)
+        if not fresh:
+            return "", []
+        note = "[Project memory excerpts relevant to this message]\n\n" + "\n\n".join(chunk.text for chunk in fresh)
+        return note, [chunk.id for chunk in fresh]
 
     async def _memory_onboarding(self) -> None:
         """First run: connect a second-brain vault. Detected Obsidian vaults are offered; a new one can be created."""
@@ -1631,6 +1651,7 @@ class ThwipCLI:
         total_tokens = 0
         limit_hit = False
         native_session_id = ""
+        memory_note, memory_chunks = self._memory_plan(text, native)
         if hasattr(self.current_agent, "get_handoff_models"):
             report = build_handoff_report(self.session, self.current_agent, self.current_agent,
                                           self.session.current_model, tools)
@@ -1650,10 +1671,12 @@ class ThwipCLI:
             with Live(console=console, refresh_per_second=12) as live:
                 try:
                     chat_kwargs = {"messages": working_messages, "model": self.session.current_model,
-                                   "system_prompt": self._system_prompt_with_memory(), "tools": tools,
+                                   "system_prompt": self._system_prompt_with_memory(text), "tools": tools,
                                    "stream": self.config.stream if tools is None else False}
                     if native:
                         chat_kwargs["resume"] = self.session.native_session(self.current_agent.name)
+                        if memory_note:
+                            chat_kwargs["memory_note"] = memory_note
                     response_stream = self.current_agent.chat(**chat_kwargs)
                     # Close the adapter generator deterministically on interruption so child processes stop.
                     closer = contextlib.aclosing(response_stream) if hasattr(response_stream, "aclose") else contextlib.nullcontext(response_stream)
@@ -1772,8 +1795,9 @@ class ThwipCLI:
                 tokens=total_tokens,
             )
             if native and native_session_id:
-                # The native session now holds every portable message; next turn sends only what is new.
-                self.session.set_native_session(self.current_agent.name, native_session_id, self.session.current_model)
+                # The native session now holds every portable message and these memory sections; next turn sends only what is new.
+                self.session.set_native_session(self.current_agent.name, native_session_id, self.session.current_model,
+                                                chunks=memory_chunks)
             if getattr(self.config, "auto_save", False):
                 if self.session.name == "new-session":
                     self.session.name = f"session-{self.session.id}"

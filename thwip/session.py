@@ -87,11 +87,19 @@ class Session:
         synced = record.get("synced", 0)
         if type(synced) is not int or synced < 0 or synced > len(self.to_portable_messages()):
             return None
+        chunks = record.get("chunks", [])
+        record["chunks"] = [c for c in chunks if isinstance(c, str)] if isinstance(chunks, list) else []
         return record
 
-    def set_native_session(self, provider: str, session_id: str, model: str = "") -> None:
-        """Record that the provider's native session has seen every portable message so far."""
-        self.native_sessions[provider] = {"id": session_id, "synced": len(self.to_portable_messages()), "model": model}
+    def set_native_session(self, provider: str, session_id: str, model: str = "", chunks: list[str] | None = None) -> None:
+        """Record that the provider's native session has seen every portable message so far.
+
+        `chunks` lists the project-memory sections already given to that session, so later turns send only new ones.
+        """
+        previous = self.native_sessions.get(provider) or {}
+        kept = previous.get("chunks", []) if isinstance(previous.get("chunks"), list) and previous.get("id") == session_id else []
+        merged = list(dict.fromkeys([*kept, *(chunks or [])]))
+        self.native_sessions[provider] = {"id": session_id, "synced": len(self.to_portable_messages()), "model": model, "chunks": merged}
         self.updated_at = time.time()
 
     def forget_native_session(self, provider: str) -> None:
@@ -246,7 +254,7 @@ class Session:
                     return None
                 if not isinstance(record.get("id"), str) or type(record.get("synced", 0)) is not int or record.get("synced", 0) < 0:
                     return None
-                if not isinstance(record.get("model", ""), str):
+                if not isinstance(record.get("model", ""), str) or not isinstance(record.get("chunks", []), list):
                     return None
             session = cls(
                 id=data.get("id", ""),
@@ -260,7 +268,8 @@ class Session:
                 messages=[Message.from_dict(m) for m in data.get("messages", [])],
                 observed_tool_results=data.get("observed_tool_results", 0),
                 tool_tracking_complete=data.get("tool_tracking_complete", False),
-                native_sessions={k: {"id": v["id"], "synced": v.get("synced", 0), "model": v.get("model", "")}
+                native_sessions={k: {"id": v["id"], "synced": v.get("synced", 0), "model": v.get("model", ""),
+                                     "chunks": [c for c in v.get("chunks", []) if isinstance(c, str)]}
                                  for k, v in native_sessions.items()},
             )
             return session

@@ -64,7 +64,12 @@ class FakeEvalAgent(BaseAgent):
         if self.broken:
             yield TextDelta(content="pong pong")   # wrong answer, and no AgentDone: violates the contract
             return
-        if "exactly the single word" in prompt:
+        codeword = re.search(r"CODEWORD-(\w+)\?", prompt)
+        if codeword:
+            haystack = (system_prompt or "") + "\n" + "\n".join(str(m.get("content", "")) for m in messages[:-1])
+            found = re.search(rf"CODEWORD-{codeword.group(1)}(?::| is) (\S+?)[.\s]", haystack + " ")
+            yield TextDelta(content=found.group(1) if found else "I do not have that information.")
+        elif "exactly the single word" in prompt:
             word = re.search(r"single word (\w+)", prompt).group(1)
             yield TextDelta(content=word)
         elif tools and "read the file" in prompt.lower():

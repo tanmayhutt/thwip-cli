@@ -42,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help="List tasks and exit")
     parser.add_argument("--out", help="Write JSON results to this path")
     parser.add_argument("--project", default=".", help="Working directory for native CLIs")
+    parser.add_argument("--memory", default="retrieve", choices=["retrieve", "truncate"],
+                        help="How project memory is sent for memory tasks: retrieve (query-aware) or truncate (first 8,000 chars)")
     args = parser.parse_args(argv)
     console = Console()
 
@@ -61,15 +63,16 @@ def main(argv: list[str] | None = None) -> int:
         print("No tasks matched.", file=sys.stderr)
         return 2
     agents = asyncio.run(_agents_for(args.provider, args.project))
-    results = asyncio.run(run_suite(agents, tasks))
+    results = asyncio.run(run_suite(agents, tasks, memory_mode=args.memory))
 
     table = Table(title=f"Results ({len(results)} runs)", box=box.ROUNDED)
-    for column in ("task", "provider", "model", "pass", "latency s", "tokens in/out", "cost $", "tools", "note"):
+    for column in ("task", "provider", "model", "pass", "latency s", "tokens in/out", "cost $", "tools", "memory chars", "note"):
         table.add_column(column, overflow="fold")
     for r in results:
         table.add_row(r.task_id, r.provider, r.model, "[green]pass[/green]" if r.passed else "[red]FAIL[/red]",
                       f"{r.latency_s:.2f}", f"{r.input_tokens}/{r.output_tokens}", f"{r.cost_usd:.4f}",
-                      f"{r.tool_calls}" + (f" ({r.malformed_tool_calls} bad)" if r.malformed_tool_calls else ""), r.note[:70])
+                      f"{r.tool_calls}" + (f" ({r.malformed_tool_calls} bad)" if r.malformed_tool_calls else ""),
+                      f"{r.memory_chars} ({r.memory_mode})" if r.memory_chars else "-", r.note[:70])
     console.print(table)
 
     summary = summarize(results)

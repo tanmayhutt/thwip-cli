@@ -20,7 +20,7 @@ Nothing else does the swapping part. That is the idea the project is built aroun
 | Tests | 21 test files, all offline using fake providers |
 | Cost tracking | Yes, per provider, saved between runs |
 | Evaluation | Started 2026-10-03: `thwip/evals/` with five tasks, an offline fake adapter, and `python -m thwip.evals`. Run live against Claude Code, Antigravity and Codex the same day |
-| Retrieval | None. Project notes are pasted in whole, then cut off at 8,000 characters |
+| Retrieval | Yes, since 2026-10-03: `retrieval.py` splits `context.md` at headings and ranks sections against the current message with BM25; the head always goes, the rest by relevance, within a budget. No embeddings or vector store yet; measured by `memory-deep-recall` |
 
 ## What it does today, in plain language
 
@@ -118,7 +118,8 @@ sign-in rather than ask for an API key.
 | File | Lines | What it does |
 |---|---|---|
 | `session.py` | 291 | Holds the conversation. Converts it to a plain provider-neutral list when switching. Saves and reloads sessions |
-| `memory.py` | 412 | Reads and writes the project's `context.md`, and syncs an Obsidian vault of project cards. Only ever overwrites files it created itself |
+| `memory.py` | ~450 | Reads and writes the project's `context.md`, chooses which sections to send for a question, and syncs an Obsidian vault of project cards. Only ever overwrites files it created itself |
+| `retrieval.py` | ~140 | Heading-based chunking and BM25 ranking for project memory. Deterministic, no model, no network |
 | `limits.py` | 112 | Records tokens and cost per provider, remembers when you hit a limit, saves it to disk |
 | `handoff.py` | 93 | Before a switch, estimates the request size, fingerprints the text, and reports which capabilities you gain or lose |
 | `utils.py` | 107 | Cost estimation, token formatting, stream collection, key masking |
@@ -127,7 +128,7 @@ sign-in rather than ask for an API key.
 
 1. You type into the prompt in `cli.py`.
 2. `session.py` adds your message to the conversation.
-3. `memory.py` reads the project's `context.md` and returns up to 8,000 characters of it.
+3. `memory.py` reads the project's `context.md`, keeps its head, and adds the sections `retrieval.py` ranks highest for your message, within a budget.
 4. `tools/__init__.py` produces the tool definitions in the shape the active provider expects.
 5. The active adapter in `agents/` sends: the system prompt, the project memory, the whole
    conversation so far, and the tool definitions.

@@ -139,13 +139,31 @@ def test_native_sessions_are_tracked_validated_and_persisted(tmp_path, monkeypat
     session.add_user_message("q")
     session.add_assistant_message("a", agent_name="openai", model="m")
     session.set_native_session("openai", "thread-1", "m")
-    assert session.native_session("openai") == {"id": "thread-1", "synced": 2, "model": "m"}
+    assert session.native_session("openai") == {"id": "thread-1", "synced": 2, "model": "m", "chunks": []}
     session.native_sessions["claude"] = {"id": "x", "synced": 99}
     assert session.native_session("claude") is None, "a record that claims more messages than exist is ignored"
     path = session.save("native-track")
     loaded = Session.load("native-track")
-    assert loaded.native_session("openai") == {"id": "thread-1", "synced": 2, "model": "m"}
+    assert loaded.native_session("openai") == {"id": "thread-1", "synced": 2, "model": "m", "chunks": []}
     loaded.clear_context()
     assert loaded.native_sessions == {}
     path.write_text(path.read_text().replace('"synced": 2', '"synced": "2"'))
     assert Session.load("native-track") is None, "malformed native session records reject the file"
+
+
+def test_native_session_remembers_memory_chunks(tmp_path, monkeypatch):
+    from thwip.session import Session
+
+    monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path))
+    session = Session(project_path=str(tmp_path), current_agent="openai", current_model="m")
+    session.add_user_message("q")
+    session.add_assistant_message("a", agent_name="openai", model="m")
+    session.set_native_session("openai", "t1", "m", chunks=["frontmatter", "snapshot"])
+    session.add_user_message("q2")
+    session.add_assistant_message("a2", agent_name="openai", model="m")
+    session.set_native_session("openai", "t1", "m", chunks=["decisions"])
+    assert session.native_session("openai")["chunks"] == ["frontmatter", "snapshot", "decisions"]
+    session.set_native_session("openai", "t2", "m", chunks=["known-issues"])
+    assert session.native_session("openai")["chunks"] == ["known-issues"], "a new native session starts with a clean slate"
+    session.save("chunks-track")
+    assert Session.load("chunks-track").native_session("openai")["chunks"] == ["known-issues"]

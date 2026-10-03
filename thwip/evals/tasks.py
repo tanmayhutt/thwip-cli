@@ -36,6 +36,8 @@ class EvalTask:
     system_prompt: str = "You are a precise assistant. Follow instructions exactly."
     fixture: dict[str, str] = field(default_factory=dict)   # relative path -> file content
     tools: bool = False               # offer thwip's tool definitions to the model
+    history: list[dict[str, str]] = field(default_factory=list)   # earlier turns replayed before the prompt (a handoff)
+    use_memory: bool = False          # give the model the fixture's context.md the way the REPL does
     kind: str = "model"               # "model" or "system"
     check: Callable[[Observation, Any], tuple[bool, str]] = lambda observation, context: (True, "")
 
@@ -113,7 +115,26 @@ def check_tool_schemas(obs: Observation, ctx) -> tuple[bool, str]:
     return True, f"{len(openai_tools)} tools consistent across both shapes; 4 invalid calls rejected"
 
 
-# --- the first five tasks --------------------------------------------------------
+def check_contains(word: str, label: str):
+    def check(obs: Observation, ctx) -> tuple[bool, str]:
+        found = word.lower() in obs.text.lower()
+        return found, f"{label}: answer {obs.text.strip()[:80]!r}"
+    return check
+
+
+def _long_context(fact_line: str) -> str:
+    """A context.md longer than the old 8,000-character cap, with one fact buried in the last section."""
+    filler = "".join(f"\n### 2026-07-{d:02d}\n\n- Routine change {d}: adjusted logging, bumped a dependency, tidied the README.\n"
+                     f"- Reviewed the dashboard queries and cached the slow one for another day.\n"
+                     f"- Rotated the on-call schedule and updated the runbook links.\n"
+                     f"- Fixed a flaky integration test by waiting for the container health check.\n"
+                     for d in range(1, 29))
+    return ("---\nproject: recall-demo\narea: Tools\nstatus: active\nupdated: 2026-10-03\n---\n\n# recall-demo Context\n\n"
+            "## Snapshot\n\n- Purpose: a demo service\n- Stack: Python\n\n## Current Work\n\n- Now: stable\n- Blocked: nothing\n- Next: nothing\n\n"
+            "## Recent Changes\n" + filler + "\n## Operations\n\n- Backups run nightly.\n- " + fact_line + "\n")
+
+
+# --- the tasks ------------------------------------------------------------------
 
 TASKS: list[EvalTask] = [
     EvalTask(
@@ -154,6 +175,28 @@ TASKS: list[EvalTask] = [
         touches="thwip/tools/__init__.py (get_openai_tools, get_anthropic_tools, execute_tool)",
         kind="system",
         check=check_tool_schemas,
+    ),
+    EvalTask(
+        id="memory-deep-recall",
+        title="Project memory: a fact buried deep in a long context.md is still found",
+        touches="thwip/memory.py (injection) and thwip/retrieval.py (chunking, BM25 ranking)",
+        prompt="According to the project memory, what is the value recorded for CODEWORD-rotation? Answer with that value only.",
+        fixture={"context.md": _long_context("CODEWORD-rotation: THURSDAY")},
+        use_memory=True,
+        check=check_contains("thursday", "deep recall"),
+    ),
+    EvalTask(
+        id="handoff-recall",
+        title="Handoff: a fact stated earlier in the conversation survives a provider switch",
+        touches="thwip/session.py (to_portable_messages) and thwip/agents/native_common.py (build_native_prompt)",
+        history=[
+            {"role": "user", "content": "For the rest of this chat, remember that CODEWORD-handoff is MAGENTA. Reply OK only."},
+            {"role": "assistant", "content": "OK"},
+            {"role": "user", "content": "Also note the staging URL is https://staging.example.test. Reply OK only."},
+            {"role": "assistant", "content": "OK"},
+        ],
+        prompt="What is the value of CODEWORD-handoff? Answer with that value only.",
+        check=check_contains("magenta", "handoff recall"),
     ),
 ]
 

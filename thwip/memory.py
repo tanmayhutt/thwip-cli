@@ -182,16 +182,46 @@ class ProjectMemory:
         data["updated"] = time.strftime("%Y-%m-%d")
         return f"{render_frontmatter(data)}\n\n{body.lstrip()}"
 
-    def injection(self) -> str:
-        """The bounded text given to an agent as project instructions."""
+    PREAMBLE = ("Project memory ({filename}). This is the canonical record for this project, shared by every "
+                "assistant used here. Treat it as current state; verify against the repository before relying on it; "
+                "do not rewrite it unless asked.")
+
+    def chunks(self):
+        from thwip.retrieval import chunk_markdown
+        return chunk_markdown(self.read())
+
+    def injection(self, query: str | None = None, mode: str = "retrieve", budget: int = MAX_INJECT_CHARS,
+                  exclude: set[str] | None = None) -> str:
+        """The bounded text given to an agent as project instructions.
+
+        mode "retrieve" (default): the file's head (frontmatter, Snapshot, Current Work) plus the sections that best
+        match `query`, within `budget` characters. mode "truncate": the first `budget` characters, the old behaviour,
+        kept so the two can be measured against each other.
+        """
         text = self.read().strip()
         if not text:
             return ""
-        if len(text) > MAX_INJECT_CHARS:
-            text = text[:MAX_INJECT_CHARS].rstrip() + "\n\n[Project memory truncated; read the full file with /memory]"
-        return (f"Project memory ({self.filename}). This is the canonical record for this project, shared by every "
-                "assistant used here. Treat it as current state; verify against the repository before relying on it; "
-                f"do not rewrite it unless asked.\n\n{text}")
+        preamble = self.PREAMBLE.format(filename=self.filename)
+        if mode == "truncate":
+            if len(text) > budget:
+                text = text[:budget].rstrip() + "\n\n[Project memory truncated; read the full file with /memory]"
+            return f"{preamble}\n\n{text}"
+        chosen = self.select(query, budget, exclude)
+        if not chosen:
+            return ""
+        body = "\n\n".join(chunk.text for chunk in chosen)
+        omitted = len(self.chunks()) - len(chosen) - len(exclude or ())
+        note = f"\n\n[{omitted} other section(s) of {self.filename} not shown; ask and they will be provided]" if omitted > 0 else ""
+        return f"{preamble}\n\n{body}{note}"
+
+    def select(self, query: str | None, budget: int = MAX_INJECT_CHARS, exclude: set[str] | None = None,
+               include_head: bool = True):
+        from thwip.retrieval import select
+        return select(self.chunks(), query, budget, exclude, include_head)
+
+    def excerpt(self, query: str, exclude: set[str], budget: int = 2500):
+        """Sections relevant to a follow-up question that the agent has not been given yet."""
+        return self.select(query, budget, exclude, include_head=False)
 
     def update_prompt(self, transcript: str) -> str:
         return (

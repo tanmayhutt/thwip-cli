@@ -31,7 +31,8 @@ def test_init_detects_stack_and_never_overwrites(tmp_path):
     assert memory.init() .startswith("---\nproject: Custom"), "init never replaces an existing file"
     assert "Project memory (context.md)" in memory.injection() and "# Custom" in memory.injection()
     memory.write("---\nproject: Big\n---\n" + "x" * 20000)
-    assert memory.injection().endswith("[Project memory truncated; read the full file with /memory]")
+    assert memory.injection(mode="truncate").endswith("[Project memory truncated; read the full file with /memory]")
+    assert "not shown" in memory.injection("anything"), "retrieve mode says how many sections were left out"
     assert memory.touch_updated("---\nupdated: 2000-01-01\nproject: Big\n---\n\nbody").split("\n")[1] != "updated: 2000-01-01"
 
 

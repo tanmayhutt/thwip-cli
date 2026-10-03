@@ -11,7 +11,7 @@ from thwip.evals.runner import write_report
 
 def test_task_set_is_well_formed():
     ids = [t.id for t in TASKS]
-    assert len(ids) == len(set(ids)) == 5
+    assert len(ids) == len(set(ids)) == 7
     assert all(t.touches and t.title for t in TASKS)
     assert [t.id for t in get_tasks(["tool-read-file"])] == ["tool-read-file"]
 
@@ -103,3 +103,14 @@ async def test_native_agent_project_points_at_fixture_during_task():
     await run_task(agent, get_tasks(["exact-single-word"])[0])
     assert seen and seen[0] != "/original" and "thwip-eval-" in seen[0]
     assert agent.project == "/original"
+
+
+@pytest.mark.asyncio
+async def test_recall_tasks_show_retrieval_beats_truncation():
+    tasks = get_tasks(["memory-deep-recall", "handoff-recall"])
+    retrieve = {r.task_id: r for r in await run_suite([FakeEvalAgent()], tasks, memory_mode="retrieve")}
+    truncate = {r.task_id: r for r in await run_suite([FakeEvalAgent()], tasks, memory_mode="truncate")}
+    assert retrieve["memory-deep-recall"].passed and retrieve["memory-deep-recall"].memory_chars < truncate["memory-deep-recall"].memory_chars
+    assert not truncate["memory-deep-recall"].passed, "the old 8,000-character cut drops the buried fact"
+    assert retrieve["handoff-recall"].passed and truncate["handoff-recall"].passed, "conversation history is never cut"
+    assert retrieve["handoff-recall"].memory_chars == 0

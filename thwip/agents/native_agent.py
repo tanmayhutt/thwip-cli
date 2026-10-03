@@ -185,7 +185,7 @@ class NativeAgent(BaseAgent):
         self._thread_id = session["thread"]["id"]
         return self._thread_id, False
 
-    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None):
+    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None, memory_note=""):
         rpc = await self._live_rpc()
         event_task = None
         chosen = model or self.get_default_model()
@@ -196,6 +196,8 @@ class NativeAgent(BaseAgent):
             if resume_id and not resumed:
                 yield NativeActivity(description="Previous Codex thread unavailable; sending the full conversation to a new one.")
             prompt, _full = build_incremental_prompt(messages, None, synced if resumed else 0)
+            if memory_note:
+                prompt = f"{prompt}\n\n{memory_note}"
             # Drop notifications left over from an earlier turn on this process.
             while not rpc.events.empty():
                 stale = rpc.events.get_nowait()
