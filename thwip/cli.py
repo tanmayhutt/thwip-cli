@@ -31,6 +31,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from thwip import compaction
 from thwip.agents import AgentRegistry
 from thwip.agents.base import (
     AgentDone,
@@ -540,52 +541,100 @@ class ThwipCLI:
         else:
             print_info("Nothing resumed.")
 
-    async def cmd_compact(self) -> None:
-        """Replace the conversation with a summary written by the current model.
+    def _compaction_worker(self):
+        """The provider that writes summaries: any ready provider other than the active one."""
+        registry = getattr(self, "registry", None)
+        ready = registry.get_ready_agents() if registry else [self.current_agent]
+        chain = getattr(getattr(self.config, "fallback", None), "chain", [])
+        return compaction.choose_worker(self.current_agent, ready, chain)
 
-        The summary is plain text, so it stays portable across providers and keeps
-        a later /switch or /handoff small.
+    async def cmd_compact(self, reason: str = "") -> bool:
+        """Summarise older turns on a different provider and keep the recent ones word for word.
+
+        The summary is plain text, so it stays portable across providers and keeps a later
+        /switch or /handoff small. The transcript on disk is unchanged.
         """
         portable = self.session.to_portable_messages()
-        if len(portable) < 2:
-            print_info("Nothing to compact yet.")
-            return
-        if not self.current_agent.is_configured():
-            print_error(f"{self.current_agent.display_name} is not connected; /switch to a ready agent first.")
-            return
-        transcript = "\n\n".join(f"[{m['role'].title()}]\n{m['content']}" for m in portable)
-        request = ("Summarize the conversation below for another assistant that will continue it. Keep every decision, "
-                   "requirement, file path, command, error, and open task. Use short bullet points under the headings "
-                   "Context, Decisions, Open tasks. Do not add commentary.\n\n" + transcript)
-        summary = ""
+        keep = getattr(getattr(self.config, "limits", None), "keep_recent_messages", 4)
+        older, recent = compaction.split_for_compaction(portable, keep)
+        if len(older) < 2:
+            print_info("Nothing to compact yet; the conversation is already short.")
+            return False
+        worker = self._compaction_worker()
+        if worker is None:
+            print_error("No connected provider can write the summary; /switch to a ready agent first.")
+            return False
+        if worker is self.current_agent:
+            print_warning(f"No other provider is ready, so {worker.display_name} will summarise its own conversation. "
+                          "If it has just hit a limit this will fail; connect another provider for a safer compaction.")
+        else:
+            print_info(f"Summarising {len(older)} older messages with {worker.display_name}; keeping the last {len(recent)} verbatim.")
         with console.status("[dim]Compacting conversation...[/dim]"):
             try:
-                stream = self.current_agent.chat(messages=[{"role": "user", "content": request}],
-                                                 model=self.session.current_model,
-                                                 system_prompt="You write faithful, compact summaries.", tools=None, stream=False)
-                async with contextlib.aclosing(stream) if hasattr(stream, "aclose") else contextlib.nullcontext(stream) as stream:
-                    async for event in stream:
-                        if isinstance(event, TextDelta):
-                            summary += event.content
-                        elif isinstance(event, LimitHit):
-                            print_warning(f"Provider limit while compacting: {event.message}")
-                            return
+                summary = await compaction.summarize(worker, older)
             except TurnInterrupted:
                 raise
             except Exception as exc:
                 print_error(f"Compaction failed: {exc}")
-                return
-        summary = summary.strip()
-        if not summary:
-            print_error("The model returned an empty summary; conversation unchanged.")
-            return
+                return False
         before = len(self.session.messages)
+        kept = [m for m in self.session.messages if m.role in {"user", "assistant"}][-len(recent):] if recent else []
         self.session.clear_context()
         self.session.add_user_message("Summary of the conversation so far, compacted by thwip:\n\n" + summary)
         self.session.add_assistant_message("Understood. I will continue from this summary.",
-                                           agent_name=self.current_agent.name, model=self.session.current_model,
-                                           company=self.current_agent.company)
-        print_success(f"Compacted {before} messages into a summary. /history shows it; /handoff shows the new size.")
+                                           agent_name=worker.name, model=worker.get_default_model(), company=worker.company)
+        self.session.messages.extend(kept)
+        self._compaction_offered_at = 0
+        print_success(f"Compacted {before} messages into a summary plus the last {len(kept)} verbatim"
+                      f"{' because ' + reason if reason else ''}. Each provider gets the compact version on its next turn.")
+        return True
+
+    def _context_pressure(self) -> tuple[int, int]:
+        """(estimated input tokens, context window) for the active model; unknown windows use the configured assumption."""
+        report = build_handoff_report(self.session, self.current_agent, self.current_agent, self.session.current_model, None)
+        window = report.context_window or getattr(getattr(self.config, "limits", None), "assumed_context_tokens", 200_000)
+        return report.estimated_input_tokens, window
+
+    async def _maybe_offer_compaction(self) -> None:
+        """After a turn: when the conversation approaches the window, offer to compact on another provider."""
+        limits = getattr(self.config, "limits", None)
+        threshold = getattr(limits, "compact_at_percent", 65)
+        if not hasattr(self, "registry") or not hasattr(self.current_agent, "get_handoff_models"):
+            return
+        estimate, window = self._context_pressure()
+        if not window or estimate * 100 < window * threshold:
+            return
+        if getattr(self, "_compaction_offered_at", 0) and estimate < self._compaction_offered_at * 1.25:
+            return  # already asked at roughly this size
+        self._compaction_offered_at = estimate
+        worker = self._compaction_worker()
+        who = worker.display_name if worker and worker is not self.current_agent else "the active provider (no alternative is ready)"
+        print_warning(f"This conversation is at about {estimate * 100 // window}% of the model's context window "
+                      f"({estimate:,} of {window:,} tokens, estimated).")
+        if await self._ask_yes_no(f"Compact older turns now using {who}? Recent turns stay verbatim. [y/N]"):
+            await self.cmd_compact(reason="the conversation was near the context limit")
+
+    def _quota_warning(self) -> None:
+        """After a turn: when the CLI reports its usage window nearly full, recommend switching before it runs out."""
+        limits = getattr(self.config, "limits", None)
+        threshold = getattr(limits, "quota_warn_percent", 85)
+        windows = getattr(self.current_agent, "limit_windows", []) or []
+        if not windows or not hasattr(self, "registry"):
+            return
+        warned = getattr(self, "_quota_warned", set())
+        self._quota_warned = warned
+        for window in windows:
+            percent = window.get("used_percent")
+            key = (self.current_agent.name, window.get("label"), window.get("resets_at"))
+            if not isinstance(percent, (int, float)) or percent < threshold or key in warned:
+                continue
+            warned.add(key)
+            others = [a for a in self.registry.get_ready_agents() if a is not self.current_agent]
+            from thwip.agents.native_common import describe_limit_windows
+            advice = (f"Ready now: {', '.join(a.display_name for a in others)}. /switch {others[0].name} keeps the conversation."
+                      if others else "No other provider is ready; connect one or wait for the reset.")
+            print_warning(f"{self.current_agent.display_name} is at {percent:.0f}% of its {window.get('label')} usage limit "
+                          f"({describe_limit_windows([window])}). {advice}")
 
     def cmd_diff(self, arg: str = "") -> None:
         """Show the project's git diff, like /diff in Codex."""
@@ -1049,7 +1098,7 @@ class ThwipCLI:
             ("/model [id]", "Pick a model for the current agent (interactive list or ID)"),
             ("/new", "Start a fresh conversation (current one is saved first)"),
             ("/resume [name]", "Resume a saved session from a numbered list"),
-            ("/compact", "Summarize the conversation with the current model to free context"),
+            ("/compact", "Summarize older turns on another provider; recent turns stay verbatim"),
             ("/diff [staged]", "Show the project's git diff"),
             ("/copy", "Copy the last response to the clipboard"),
             ("/export [path]", "Write the conversation to a Markdown file with model attribution"),
@@ -1798,6 +1847,8 @@ class ThwipCLI:
                 # The native session now holds every portable message and these memory sections; next turn sends only what is new.
                 self.session.set_native_session(self.current_agent.name, native_session_id, self.session.current_model,
                                                 chunks=memory_chunks)
+            self._quota_warning()
+            await self._maybe_offer_compaction()
             if getattr(self.config, "auto_save", False):
                 if self.session.name == "new-session":
                     self.session.name = f"session-{self.session.id}"

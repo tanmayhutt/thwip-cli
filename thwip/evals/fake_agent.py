@@ -64,6 +64,12 @@ class FakeEvalAgent(BaseAgent):
         if self.broken:
             yield TextDelta(content="pong pong")   # wrong answer, and no AgentDone: violates the contract
             return
+        if prompt.startswith("Summarize the conversation below"):
+            facts = re.findall(r"CODEWORD-\w+ is \w+", prompt)
+            yield TextDelta(content="Context\n- A long routine conversation about build status.\nDecisions\n"
+                                    + "".join(f"- {fact}.\n" for fact in facts) + "Open tasks\n- None.")
+            yield AgentDone(usage=usage)
+            return
         codeword = re.search(r"CODEWORD-(\w+)\?", prompt)
         if codeword:
             haystack = (system_prompt or "") + "\n" + "\n".join(str(m.get("content", "")) for m in messages[:-1])

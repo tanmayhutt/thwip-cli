@@ -45,6 +45,8 @@ class EvalResult:
     answer: str = ""          # first 200 characters of the final text, for transparency
     memory_chars: int = 0     # characters of project memory sent (0 when the task carries none)
     memory_mode: str = ""
+    compacted_from: int = 0   # history messages before compaction (0 when the task does not compact)
+    compacted_to: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -89,7 +91,16 @@ async def run_task(agent, task: EvalTask, model: str | None = None, memory_mode:
             injection = ProjectMemory(str(project)).injection(task.prompt, mode=memory_mode)
             system_prompt = f"{system_prompt}\n\n{injection}".strip()
             result.memory_chars = len(injection)
-        messages: list[dict[str, Any]] = [*task.history, {"role": "user", "content": task.prompt}]
+        history = list(task.history)
+        if task.compact_before and history:
+            from thwip.compaction import compacted_messages, split_for_compaction, summarize
+
+            older, recent = split_for_compaction(history, 4)
+            summary = await summarize(agent, older, model=chosen)
+            history = compacted_messages(summary, recent)
+            result.compacted_from = len(task.history)
+            result.compacted_to = len(history)
+        messages: list[dict[str, Any]] = [*history, {"role": "user", "content": task.prompt}]
         for round_index in range(MAX_TOOL_ROUNDS):
             result.rounds = round_index + 1
             requests: list[ToolUseStart] = []

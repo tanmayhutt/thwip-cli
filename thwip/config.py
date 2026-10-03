@@ -218,8 +218,12 @@ class MemoryConfig:
 
 @dataclass
 class LimitsConfig:
-    warn_at_percent: int = 80
-    auto_switch: bool = False  # Prompt user vs auto-switch
+    warn_at_percent: int = 80          # context-size warning (handoff estimate vs the model's window)
+    auto_switch: bool = False          # Prompt user vs auto-switch on a limit hit
+    quota_warn_percent: int = 85       # warn when a CLI reports its usage window this full
+    compact_at_percent: int = 65       # offer compaction when the context estimate reaches this share of the window
+    assumed_context_tokens: int = 200_000   # window to assume when a model does not publish one (native CLIs)
+    keep_recent_messages: int = 4      # messages kept word for word after compaction
 
 
 @dataclass
@@ -287,7 +291,8 @@ class ThwipConfig:
             "ollama": {"host": str},
             "fallback": {"enabled": bool, "chain": list},
             "display": {key: type(value) for key, value in vars(self.display).items()},
-            "limits": {"warn_at_percent": int, "auto_switch": bool},
+            "limits": {"warn_at_percent": int, "auto_switch": bool, "quota_warn_percent": int,
+                       "compact_at_percent": int, "assumed_context_tokens": int, "keep_recent_messages": int},
             "memory": {"enabled": bool, "file": str, "vault": str, "offer_update_on_quit": bool,
                        "onboarded": bool, "cards_dir": str, "scan": list},
         }
@@ -387,6 +392,10 @@ class ThwipConfig:
             self.limits.warn_at_percent = limits["warn_at_percent"]
         if "auto_switch" in limits:
             self.limits.auto_switch = limits["auto_switch"]
+        for key, low, high in (("quota_warn_percent", 1, 100), ("compact_at_percent", 1, 100),
+                               ("assumed_context_tokens", 1_000, 10_000_000), ("keep_recent_messages", 0, 50)):
+            if key in limits and low <= limits[key] <= high:
+                setattr(self.limits, key, limits[key])
 
     def save(self) -> None:
         """Save current config to TOML file."""
@@ -435,6 +444,10 @@ class ThwipConfig:
             },
             "limits": {
                 "warn_at_percent": self.limits.warn_at_percent,
+                "quota_warn_percent": self.limits.quota_warn_percent,
+                "compact_at_percent": self.limits.compact_at_percent,
+                "assumed_context_tokens": self.limits.assumed_context_tokens,
+                "keep_recent_messages": self.limits.keep_recent_messages,
                 "auto_switch": self.limits.auto_switch,
             },
         }

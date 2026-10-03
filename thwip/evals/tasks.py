@@ -37,6 +37,7 @@ class EvalTask:
     fixture: dict[str, str] = field(default_factory=dict)   # relative path -> file content
     tools: bool = False               # offer thwip's tool definitions to the model
     history: list[dict[str, str]] = field(default_factory=list)   # earlier turns replayed before the prompt (a handoff)
+    compact_before: bool = False      # compact the history first (summary + recent turns), as thwip does near the window
     use_memory: bool = False          # give the model the fixture's context.md the way the REPL does
     kind: str = "model"               # "model" or "system"
     check: Callable[[Observation, Any], tuple[bool, str]] = lambda observation, context: (True, "")
@@ -134,6 +135,30 @@ def _long_context(fact_line: str) -> str:
             "## Recent Changes\n" + filler + "\n## Operations\n\n- Backups run nightly.\n- " + fact_line + "\n")
 
 
+def _long_history(fact_turns: list[tuple[str, str]], filler_turns: int) -> list[dict[str, str]]:
+    history: list[dict[str, str]] = []
+    for user, assistant in fact_turns:
+        history += [{"role": "user", "content": user}, {"role": "assistant", "content": assistant}]
+    for i in range(filler_turns):
+        history += [{"role": "user", "content": f"Routine question {i}: is the build green and are the logs quiet today?"},
+                    {"role": "assistant", "content": f"Routine answer {i}: the build is green and the logs are quiet."}]
+    return history
+
+
+def check_worker_selection(obs: Observation, ctx) -> tuple[bool, str]:
+    """thwip/compaction.py: the summary worker is never the active provider while an alternative is ready."""
+    from types import SimpleNamespace
+
+    from thwip.compaction import choose_worker
+
+    a, b, c = (SimpleNamespace(name=n, display_name=n, is_configured=lambda: True) for n in ("a", "b", "c"))
+    if choose_worker(a, [a, b, c]) is a or choose_worker(a, [a, b, c], ["c/x", "b/y"]) is not c:
+        return False, "worker selection returned the active provider or ignored the chain order"
+    if choose_worker(a, [a]) is not a or choose_worker(a, []) is not a:
+        return False, "last-resort behaviour wrong when no alternative exists"
+    return True, "active provider skipped; chain order honored; last resort handled"
+
+
 # --- the tasks ------------------------------------------------------------------
 
 TASKS: list[EvalTask] = [
@@ -197,6 +222,22 @@ TASKS: list[EvalTask] = [
         ],
         prompt="What is the value of CODEWORD-handoff? Answer with that value only.",
         check=check_contains("magenta", "handoff recall"),
+    ),
+    EvalTask(
+        id="compaction-recall",
+        title="Compaction: a fact from early in a long conversation survives summarisation",
+        touches="thwip/compaction.py (summarize, split_for_compaction, compacted_messages)",
+        history=_long_history([("Remember that CODEWORD-compact is OLIVE. Reply OK only.", "OK")], filler_turns=10),
+        prompt="What is the value of CODEWORD-compact? Answer with that value only.",
+        compact_before=True,
+        check=check_contains("olive", "compaction recall"),
+    ),
+    EvalTask(
+        id="compaction-worker-never-active",
+        title="Compaction never runs on the provider that triggered it while another is ready",
+        touches="thwip/compaction.py (choose_worker)",
+        kind="system",
+        check=check_worker_selection,
     ),
 ]
 

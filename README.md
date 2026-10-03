@@ -71,7 +71,7 @@ thwip install-man               # then `man thwip` works
 | `/model [id]` | Pick a model for the current agent from a numbered list or by ID |
 | `/new` | Start a fresh conversation; the current one is saved first |
 | `/resume [name]` | Resume a saved session from a numbered list |
-| `/compact` | Summarize the conversation with the current model to free context; the summary is plain text and travels across providers |
+| `/compact` | Summarize older turns on another provider and keep recent turns verbatim; the summary is plain text and travels across providers |
 | `/diff [staged]` | Show the project's git diff |
 | `/copy` | Copy the last response to the clipboard |
 | `/export [path]` | Write the conversation to Markdown with per-message model attribution |
@@ -209,8 +209,8 @@ python -m thwip.evals --provider openai --task tool-read-file
 
 Each task names the file it tests: the streaming event contract in `agents/base.py`, exact
 instruction following, a tool round trip and the path guard in `tools/`, the consistency of
-the OpenAI and Anthropic tool schemas, deep recall from a long project memory file, and recall
-across a provider handoff. Native CLIs bring their own tools, so for them the tool
+the OpenAI and Anthropic tool schemas, deep recall from a long project memory file, recall
+across a provider handoff, recall after compaction, and the compaction worker rule. Native CLIs bring their own tools, so for them the tool
 tasks score the final answer only and say so in the note.
 
 ## Live model lists
@@ -245,6 +245,35 @@ openai = "https://gateway.example/v1"
 The repository uses this to run every direct adapter end to end against a local fake
 provider in `tests/fake_providers.py`, so streaming, tool rounds, live catalogs, and
 HTTP 429 handling are verified through the real SDKs without spending on real keys.
+
+## Compaction and early warnings
+
+Two different limits, two different protections.
+
+**Context window.** When the conversation's estimated size reaches `compact_at_percent` of the
+active model's window (65 percent by default; models that publish no window are assumed to have
+`assumed_context_tokens`, 200,000), thwip offers to compact. Compaction summarises the older turns
+and keeps the last `keep_recent_messages` (4) word for word. The summary is written by a ready
+provider other than the active one, because the provider that is running out of room or quota is
+the one that cannot be trusted with one more request; the active provider is used only when nothing
+else is connected, with a warning. `/compact` does the same on demand. The transcript on disk is
+never deleted. Every provider's warm session restarts from the compact history on its next turn.
+
+**Usage quota.** Codex and Claude Code report their 5-hour and 7-day usage after each turn. When a
+window reaches `quota_warn_percent` (85 percent by default) thwip warns once per window and names
+the ready alternatives, so you can switch before the limit hits rather than after. Antigravity
+reports no windows, so for it the first signal is still the limit error, which failover handles.
+
+```toml
+[limits]
+quota_warn_percent = 85
+compact_at_percent = 65
+assumed_context_tokens = 200000
+keep_recent_messages = 4
+```
+
+The evaluation harness covers both: `compaction-recall` checks a fact from early in a long
+conversation survives summarisation, and `compaction-worker-never-active` checks the worker rule.
 
 ## Usage-limit failover
 

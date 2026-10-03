@@ -20,6 +20,7 @@ Nothing else does the swapping part. That is the idea the project is built aroun
 | Tests | 21 test files, all offline using fake providers |
 | Cost tracking | Yes, per provider, saved between runs |
 | Evaluation | Started 2026-10-03: `thwip/evals/` with five tasks, an offline fake adapter, and `python -m thwip.evals`. Run live against Claude Code, Antigravity and Codex the same day |
+| Compaction | Yes, since 2026-10-03: `compaction.py` summarises older turns on a provider other than the active one, keeps recent turns verbatim, and is offered automatically near the context window. Quota warnings come from the CLIs' own usage reports |
 | Retrieval | Yes, since 2026-10-03: `retrieval.py` splits `context.md` at headings and ranks sections against the current message with BM25; the head always goes, the rest by relevance, within a budget. No embeddings or vector store yet; measured by `memory-deep-recall` |
 
 ## What it does today, in plain language
@@ -120,6 +121,7 @@ sign-in rather than ask for an API key.
 | `session.py` | 291 | Holds the conversation. Converts it to a plain provider-neutral list when switching. Saves and reloads sessions |
 | `memory.py` | ~450 | Reads and writes the project's `context.md`, chooses which sections to send for a question, and syncs an Obsidian vault of project cards. Only ever overwrites files it created itself |
 | `retrieval.py` | ~140 | Heading-based chunking and BM25 ranking for project memory. Deterministic, no model, no network |
+| `compaction.py` | ~90 | Worker selection (never the active provider), the summary request, and the split between summarised and verbatim turns |
 | `limits.py` | 112 | Records tokens and cost per provider, remembers when you hit a limit, saves it to disk |
 | `handoff.py` | 93 | Before a switch, estimates the request size, fingerprints the text, and reports which capabilities you gain or lose |
 | `utils.py` | 107 | Cost estimation, token formatting, stream collection, key masking |
@@ -174,11 +176,7 @@ Fix: split the file into chunks by heading, convert each chunk into an embedding
 and at question time send only the few chunks closest in meaning to what was asked. Typical result
 is a few hundred tokens instead of two thousand, and better answers because there is less noise.
 
-**2. Trim old conversation turns.**
-
-There is already a `/compact` command in `cli.py`, but it is manual. Make it automatic: once the
-estimate from `handoff.py` crosses a threshold, summarise the oldest turns into a short paragraph
-and keep the recent ones verbatim.
+**2. Trim old conversation turns.** Done: `/compact` and the automatic offer at 65 percent of the window summarise older turns on another provider and keep the recent ones verbatim.
 
 **3. Send tool definitions only when they are needed.**
 

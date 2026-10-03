@@ -11,7 +11,7 @@ from thwip.evals.runner import write_report
 
 def test_task_set_is_well_formed():
     ids = [t.id for t in TASKS]
-    assert len(ids) == len(set(ids)) == 7
+    assert len(ids) == len(set(ids)) == 9
     assert all(t.touches and t.title for t in TASKS)
     assert [t.id for t in get_tasks(["tool-read-file"])] == ["tool-read-file"]
 
@@ -114,3 +114,11 @@ async def test_recall_tasks_show_retrieval_beats_truncation():
     assert not truncate["memory-deep-recall"].passed, "the old 8,000-character cut drops the buried fact"
     assert retrieve["handoff-recall"].passed and truncate["handoff-recall"].passed, "conversation history is never cut"
     assert retrieve["handoff-recall"].memory_chars == 0
+
+
+@pytest.mark.asyncio
+async def test_compaction_tasks_pass_offline():
+    results = {r.task_id: r for r in await run_suite([FakeEvalAgent()], get_tasks(["compaction-recall", "compaction-worker-never-active"]))}
+    recall = results["compaction-recall"]
+    assert recall.passed and recall.compacted_from == 22 and recall.compacted_to == 6, recall.note
+    assert results["compaction-worker-never-active"].passed
