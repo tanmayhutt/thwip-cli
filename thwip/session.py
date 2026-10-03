@@ -57,10 +57,9 @@ class Session:
     project_path: str = "."
     current_agent: str = "claude"
     current_model: str = "claude-opus-5"
-    system_prompt: str = (
-        "You are an expert AI software engineer. You have tools to inspect files, "
-        "write code, run commands, and build software. Be concise, precise, and proactive."
-    )
+    # The user's own standing instructions, if any. thwip adds its own short, persona-free note
+    # (see cli.build_instructions); who the assistant should "be" is the user's choice, not thwip's.
+    system_prompt: str = ""
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     messages: list[Message] = field(default_factory=list)

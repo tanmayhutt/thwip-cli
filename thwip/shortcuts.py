@@ -20,6 +20,7 @@ SLASH_COMMANDS = [
     ("/diff", "Show the project's git diff"),
     ("/copy", "Copy the last response to the clipboard"),
     ("/export", "Write the conversation to a Markdown file"),
+    ("/prompt", "Show or set your standing instructions for every assistant"),
     ("/memory", "Show this project's memory file"),
     ("/memory update", "Let the current model update the memory from this conversation"),
     ("/memory sync", "File the project into the second-brain vault"),

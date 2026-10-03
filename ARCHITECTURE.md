@@ -132,8 +132,8 @@ sign-in rather than ask for an API key.
 2. `session.py` adds your message to the conversation.
 3. `memory.py` reads the project's `context.md`, keeps its head, and adds the sections `retrieval.py` ranks highest for your message, within a budget.
 4. `tools/__init__.py` produces the tool definitions in the shape the active provider expects.
-5. The active adapter in `agents/` sends: the system prompt, the project memory, the whole
-   conversation so far, and the tool definitions.
+5. The active adapter in `agents/` sends: your standing instructions if any, thwip's neutral note, the relevant
+   project memory, the conversation (or only what the provider has not seen), and tool definitions for direct API models.
 6. The reply streams back as a series of small events: text, thinking, a tool request, token counts.
 7. If the model asks for a tool, the tool runs. If it changes a file, you are asked first.
 8. The tool result goes back to the model and it continues.

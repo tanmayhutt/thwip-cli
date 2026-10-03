@@ -139,6 +139,22 @@ replaces Thwip with the Codex CLI itself in the selected project. Conversation
 history is not transferred by the launcher; use `/session load` after restarting
 Thwip to resume.
 
+## What the assistants are told
+
+thwip imposes no persona. Every assistant receives, in this order: your own standing instructions if
+you set any, a short neutral note from thwip ("you are being used through thwip; earlier turns may
+have been answered by a different assistant; treat them as real history"), a line about thwip's
+tools only when thwip is actually offering tools (direct API models), and the relevant parts of the
+project memory. Native CLIs keep their own system prompts, tools, and safety rules; thwip's note is
+layered on top and says so.
+
+```text
+/prompt                      show what is sent
+/prompt set <text>           your instructions for this session, for example "Answer in Hindi" or "I am new to programming"
+/prompt save                 keep them in ~/.thwip/config.toml under [defaults] system_prompt
+/prompt reset                clear them
+```
+
 ## Project memory and your second brain
 
 Every project gets one canonical memory file, `context.md` in the project root, that
@@ -157,6 +173,7 @@ notes are never touched.
 
 | Command | Action |
 |:---|:---|
+| `/prompt [show|set|reset|save]` | Your standing instructions for every assistant; thwip adds only a neutral note |
 | `/memory` | Show this project's memory file |
 | `/memory init [area]` | Create it from the template with detected stack and entry points |
 | `/memory update` | Ask the current model to revise it from the conversation; a diff is shown and written only after you confirm |

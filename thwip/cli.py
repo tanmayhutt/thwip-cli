@@ -104,6 +104,32 @@ class QuietTerminal:
         return False
 
 
+THWIP_NOTE_NATIVE = (
+    "You are being used through thwip, which lets the user talk to several AI assistants in one conversation. "
+    "Earlier turns may have been answered by a different assistant; treat them as real history and continue naturally. "
+    "Keep your own tools, permissions, and safety rules."
+)
+THWIP_NOTE_DIRECT = (
+    "You are being used through thwip, which lets the user talk to several AI assistants in one conversation. "
+    "Earlier turns may have been answered by a different assistant; treat them as real history and continue naturally."
+)
+THWIP_NOTE_TOOLS = (
+    "thwip provides tools for files, shell commands, Python, and git inside the user's project. "
+    "Use them when they help; actions that change files ask the user first."
+)
+
+
+def build_instructions(user_prompt: str, memory: str, native: bool, tools_offered: bool) -> str:
+    """Compose what an assistant is told. No persona is imposed; the user's instructions, if any, come first."""
+    parts = [user_prompt.strip()] if user_prompt and user_prompt.strip() else []
+    parts.append(THWIP_NOTE_NATIVE if native else THWIP_NOTE_DIRECT)
+    if tools_offered and not native:
+        parts.append(THWIP_NOTE_TOOLS)
+    if memory:
+        parts.append(memory)
+    return "\n\n".join(parts)
+
+
 def pretty_path(path) -> str:
     """Show paths relative to the home directory so panels stop wrapping."""
     text = str(path)
@@ -141,6 +167,7 @@ class ThwipCLI:
             project_path=self.config.project,
             current_agent=self.config.default_agent,
             current_model=self.config.default_model,
+            system_prompt=getattr(self.config, "system_prompt", "") or "",
         )
         self.current_agent = self._resolve_initial_agent()
         console.width = min(console.width, self.config.display.max_width)
@@ -416,6 +443,9 @@ class ThwipCLI:
 
         elif cmd == "/export":
             self.cmd_export(cmd_line.partition(" ")[2].strip())
+
+        elif cmd in ("/prompt", "/instructions"):
+            await self.cmd_prompt(arg1, cmd_line.partition(" ")[2].partition(" ")[2].strip())
 
         elif cmd in ("/memory", "/mem", "/brain"):
             await self.cmd_memory(arg1.lower(), cmd_line.partition(" ")[2].partition(" ")[2].strip())
@@ -744,13 +774,42 @@ class ThwipCLI:
         cfg = self._memory_config()
         return Vault(cfg.vault, getattr(cfg, "cards_dir", "Projects")) if cfg.vault else None
 
-    def _system_prompt_with_memory(self, query: str | None = None) -> str:
-        """Base instructions plus the parts of the project's memory file relevant to this message."""
-        base = self.session.system_prompt or ""
-        if not self._memory_config().enabled:
-            return base
-        injection = self._memory().injection(query)
-        return f"{base}\n\n{injection}".strip() if injection else base
+    def _system_prompt_with_memory(self, query: str | None = None, native: bool | None = None,
+                                   tools_offered: bool = False) -> str:
+        """What every assistant is told: a short persona-free note from thwip, the user's own standing
+        instructions if any, and the parts of the project memory relevant to this message."""
+        if native is None:
+            native = bool(getattr(self.current_agent, "native_tools", False))
+        memory = ""
+        if self._memory_config().enabled:
+            memory = self._memory().injection(query)
+        return build_instructions(self.session.system_prompt, memory, native=native, tools_offered=tools_offered)
+
+    async def cmd_prompt(self, sub: str = "", rest: str = "") -> None:
+        """/prompt show | set <text> | reset | save: the user's standing instructions for every assistant."""
+        sub = sub.lower()
+        if sub in ("", "show"):
+            current = self.session.system_prompt or "(none; thwip only sends its neutral note and project memory)"
+            console.print(Panel(Text(current), title="Your standing instructions", box=box.ROUNDED))
+            console.print(Text("thwip's own note, always sent:", style="dim"))
+            console.print(Text(build_instructions("", "", native=bool(getattr(self.current_agent, "native_tools", False)),
+                                                  tools_offered=False), style="dim"))
+            console.print(Text("/prompt set <text> for this session, /prompt save to keep it in config, /prompt reset to clear.", style="dim"))
+        elif sub == "set":
+            if not rest:
+                print_info("Usage: /prompt set <text>")
+                return
+            self.session.system_prompt = rest.strip()[:4000]
+            print_success("Standing instructions set for this session. Warm native sessions pick them up when they restart; /prompt save keeps them.")
+        elif sub == "reset":
+            self.session.system_prompt = ""
+            print_success("Standing instructions cleared for this session.")
+        elif sub == "save":
+            self.config.system_prompt = self.session.system_prompt
+            self.config.save()
+            print_success("Saved to ~/.thwip/config.toml under [defaults] system_prompt.")
+        else:
+            print_info("Usage: /prompt [show|set <text>|reset|save]")
 
     def _memory_plan(self, text: str, native: bool) -> tuple[str, list[str]]:
         """Decide what project memory this turn carries and which chunk ids the native session will then hold.
@@ -1104,6 +1163,7 @@ class ThwipCLI:
             ("/export [path]", "Write the conversation to a Markdown file with model attribution"),
             ("!<command>", "Run a shell command in the project without a model"),
             ("@path in a message", "Attach a project file's content to your message"),
+            ("/prompt [show|set <text>|reset|save]", "Your standing instructions for every assistant; thwip itself adds only a neutral note"),
             ("/memory [show|init|edit|update|sync|vault|link]", "Project memory file shared by every agent, filed into your second-brain vault"),
             ("/session save [name]", "Save current chat session"),
             ("/session load <name>", "Load a previously saved session"),
@@ -1720,7 +1780,8 @@ class ThwipCLI:
             with Live(console=console, refresh_per_second=12) as live:
                 try:
                     chat_kwargs = {"messages": working_messages, "model": self.session.current_model,
-                                   "system_prompt": self._system_prompt_with_memory(text), "tools": tools,
+                                   "system_prompt": self._system_prompt_with_memory(text, native, tools_offered=bool(tools)),
+                                   "tools": tools,
                                    "stream": self.config.stream if tools is None else False}
                     if native:
                         chat_kwargs["resume"] = self.session.native_session(self.current_agent.name)

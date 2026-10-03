@@ -235,6 +235,7 @@ class ThwipConfig:
     default_model: str = "claude-opus-5"
     project: str = "."
     theme: str = "dark"
+    system_prompt: str = ""       # standing instructions for every assistant, chosen by the user
     stream: bool = True
     auto_save: bool = True
     confirm_tools: bool = True
@@ -287,7 +288,7 @@ class ThwipConfig:
         # Invalid values must not become truthy permission flags or crash startup.
         specs = {
             "defaults": {"agent": str, "model": str, "project": str, "theme": str,
-                         "stream": bool, "auto_save": bool, "confirm_tools": bool},
+                         "stream": bool, "auto_save": bool, "confirm_tools": bool, "system_prompt": str},
             "ollama": {"host": str},
             "fallback": {"enabled": bool, "chain": list},
             "display": {key: type(value) for key, value in vars(self.display).items()},
@@ -332,6 +333,8 @@ class ThwipConfig:
             self.auto_save = defaults["auto_save"]
         if "confirm_tools" in defaults:
             self.confirm_tools = defaults["confirm_tools"]
+        if "system_prompt" in defaults:
+            self.system_prompt = defaults["system_prompt"].strip()[:4000]
 
         # Keys from config file
         keys_data = data.get("keys", {})
@@ -408,6 +411,7 @@ class ThwipConfig:
                 "stream": self.stream,
                 "auto_save": self.auto_save,
                 "confirm_tools": self.confirm_tools,
+                "system_prompt": self.system_prompt,
             },
             # Never persist keys discovered from environment variables or another
             # application's config. Only values explicitly stored in thwip belong here.
