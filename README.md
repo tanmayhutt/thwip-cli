@@ -183,6 +183,25 @@ If your vault already has hand-written project notes under `Projects/`, set `car
 subfolder such as `Projects/thwip`. thwip's cards, hubs, and dashboard then live inside that
 folder and link among themselves, and your own notes stay untouched.
 
+## Evaluation harness
+
+`thwip.evals` runs a fixed set of tasks against any adapter and scores them deterministically:
+pass or fail, latency, tokens, estimated cost, tool calls, malformed tool calls. The same tasks run
+against an in-process fake adapter, so the scoring code is itself tested offline and in CI.
+
+```bash
+python -m thwip.evals --list                 # the task set and the source file each task exercises
+python -m thwip.evals                        # offline, against the fake adapter; exit code 1 on any failure
+python -m thwip.evals --provider broken      # a deliberately bad adapter, to see failures reported
+python -m thwip.evals --provider all --out evals.json   # every ready provider, results saved as JSON
+python -m thwip.evals --provider openai --task tool-read-file
+```
+
+Each task names the file it tests: the streaming event contract in `agents/base.py`, exact
+instruction following, a tool round trip and the path guard in `tools/`, and the consistency of
+the OpenAI and Anthropic tool schemas. Native CLIs bring their own tools, so for them the tool
+tasks score the final answer only and say so in the note.
+
 ## Live model lists
 
 Model lists are not hardcoded. Each connected source supplies its own list:
