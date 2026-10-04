@@ -270,3 +270,22 @@ async def test_codex_falls_back_to_new_thread_when_resume_fails(monkeypatch):
     assert start['ephemeral'] is False
     assert '[User]\nfirst' in _turn_prompt(rpc), 'full transcript goes to the new thread'
     assert events[-1].native_session == {'id': 't'}
+
+
+@pytest.mark.asyncio
+async def test_codex_sandbox_follows_write_mode_and_restarts_thread(monkeypatch):
+    agent = NativeAgent('openai', '.')
+    rpc = FakeRPC('openai')
+    async def connect():
+        return rpc
+    monkeypatch.setattr(agent, '_connect', connect)
+    [e async for e in agent.chat([{'role': 'user', 'content': 'a'}], model='future-model')]
+    start = next(p for m, p in rpc.requests if m == 'thread/start')
+    assert start['sandbox'] == 'read-only'
+    rpc.requests.clear()
+    agent.writes = 'allow'
+    [e async for e in agent.chat([{'role': 'user', 'content': 'b'}], model='future-model', resume={'id': 't', 'synced': 0})]
+    methods = [m for m, _ in rpc.requests]
+    assert 'thread/resume' in methods, 'a mode change re-opens the thread with the new sandbox'
+    resumed = next(p for m, p in rpc.requests if m == 'thread/resume')
+    assert resumed['sandbox'] == 'workspace-write'

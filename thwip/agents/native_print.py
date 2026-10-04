@@ -76,6 +76,7 @@ class PrintAgent(BaseAgent):
         self.ready = False
         self.discovery_error = "Not connected yet"
         self.limit_windows: list[dict] = []
+        self.writes = "deny"   # "allow" lets the CLI edit files inside the project without prompts
 
     # --- Detection ---
 
@@ -187,14 +188,19 @@ class PrintAgent(BaseAgent):
         if self.name == "claude":
             # Path patterns confine Claude Code's own read tools to the project folder; anything outside is
             # a permission denial in print mode. Verified live 2026-10-04 (../secret.txt refused, note.txt read).
+            allowed = "Read(./**),Glob(./**),Grep(./**),WebFetch,WebSearch"
+            if self.writes == "allow":
+                allowed += ",Edit(./**),Write(./**)"   # project-scoped; ../ paths are still permission denials
             command = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                       "--model", model, "--allowedTools", "Read(./**),Glob(./**),Grep(./**),WebFetch,WebSearch"]
+                       "--model", model, "--allowedTools", allowed]
             command += ["--resume", resume_id] if resume_id else ["--session-id", new_id]
             if system_prompt and not resume_id:
                 command += ["--append-system-prompt", system_prompt]
             return command, prompt
         command = ["--print", prompt, "--output-format", "stream-json", "--model", model,
                    "--print-timeout", f"{TURN_TIMEOUT}s"]
+        if self.writes == "allow":
+            command += ["--mode", "accept-edits"]   # Antigravity applies file edits without a prompt
         if resume_id:
             command += ["--conversation", resume_id]
         return command, None

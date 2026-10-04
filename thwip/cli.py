@@ -447,6 +447,9 @@ class ThwipCLI:
         elif cmd == "/export":
             self.cmd_export(cmd_line.partition(" ")[2].strip())
 
+        elif cmd == "/writes":
+            self.cmd_writes(arg1.lower())
+
         elif cmd == "/recall":
             self.cmd_recall(cmd_line.partition(" ")[2].strip())
 
@@ -1102,6 +1105,28 @@ class ThwipCLI:
             return "No earlier conversation matched that query." if self.session.archive else "Nothing has been compacted yet; the full conversation is already in context."
         return "\n\n".join(chunk.text for chunk in found)
 
+    def cmd_writes(self, mode: str = "") -> None:
+        """/writes [allow|deny]: whether native CLIs may edit files inside the project without a prompt."""
+        from thwip.config import NativeConfig
+        cfg = getattr(self.config, "native", None) or NativeConfig()
+        if mode in {"allow", "deny"}:
+            cfg.writes = mode
+            self.config.native = cfg
+            with contextlib.suppress(Exception):
+                self.config.save()
+            for agent in self.registry.list_agents():
+                if getattr(agent, "native_tools", False):
+                    agent.writes = mode
+            if mode == "allow":
+                print_success("Native writes allowed: Claude Code and Antigravity may edit files inside the project without asking; "
+                              "Codex uses a workspace-write sandbox. Files outside the project are still refused. Saved to config.")
+            else:
+                print_success("Native writes denied: Claude Code and Antigravity run read-only; Codex asks before any write. Saved to config.")
+            return
+        current = cfg.writes
+        console.print(Text(f"Native writes: {current}. " + ("Edits inside the project happen without prompts." if current == "allow"
+                           else "Native sessions are read-only; Codex asks before writing.") + " Use /writes allow or /writes deny.", style="dim"))
+
     def cmd_recall(self, query: str) -> None:
         if not query:
             print_info(f"Usage: /recall <words>. {len(self.session.archive)} archived message(s) are searchable.")
@@ -1233,6 +1258,7 @@ class ThwipCLI:
             ("!<command>", "Run a shell command in the project without a model"),
             ("@path in a message", "Attach a project file's content to your message"),
             ("/prompt [show|set <text>|reset|save]", "Your standing instructions for every assistant; thwip itself adds only a neutral note"),
+            ("/writes [allow|deny]", "Let native CLIs edit files inside the project without prompts (default deny)"),
             ("/recall <words>", "Search earlier turns that compaction summarized away"),
             ("/trace [n]", "Recent request traces: latency, tokens, cost, tool calls, errors per provider"),
             ("/memory [show|init|edit|update|sync|vault|link]", "Project memory file shared by every agent, filed into your second-brain vault"),
@@ -1629,6 +1655,7 @@ class ThwipCLI:
         content.append(f"Tokens:      {self.session.get_total_tokens():,} used\n", style="dim")
         if getattr(self.current_agent, "native_tools", False):
             content.append("Connection:  Existing CLI sign-in; billing and tool accounting managed by native CLI\n", style="dim")
+            content.append(f"Writes:      {getattr(getattr(self.config, 'native', None), 'writes', 'deny')} (/writes allow|deny)\n", style="dim")
             content.append(f"Usage:       {describe_limit_windows(getattr(self.current_agent, 'limit_windows', []))}\n", style="dim")
             record = self.session.native_session(self.current_agent.name)
             if record:
@@ -1754,6 +1781,7 @@ class ThwipCLI:
         if native:
             self.session.tool_tracking_complete = False
             self.current_agent.project = str(Path(self.session.project_path).resolve())
+            self.current_agent.writes = getattr(getattr(self.config, "native", None), "writes", "deny")
             if not self.current_agent.is_configured():
                 await self.current_agent.refresh_models()
                 if not self.current_agent.is_configured():

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-04T12:55:02",
+  "generated_at": "2026-10-04T18:32:46",
   "results": [
     {
       "task_id": "tool-schemas-consistent",
@@ -222,24 +222,24 @@
       "provider": "claude",
       "model": "fable",
       "passed": true,
-      "note": "skipped: native sessions are read-only in thwip; the CLI declined the write and said so",
-      "latency_s": 16.274,
-      "input_tokens": 74158,
-      "output_tokens": 442,
+      "note": "edited via the CLI, with project-scoped writes allowed",
+      "latency_s": 14.249,
+      "input_tokens": 74166,
+      "output_tokens": 316,
       "cost_usd": 0.0,
       "tool_calls": 0,
       "native_activity": 2,
       "malformed_tool_calls": 0,
       "rounds": 1,
       "error": "",
-      "answer": "I'll read config.ini, then change the timeout value.Not done. The edit to config.ini was blocked because write permission to that file was not granted.\n\nThe file currently contains:\n\n```ini\n[server]\nt",
+      "answer": "I'll read config.ini, then change the timeout value.Done. The timeout line in config.ini now reads 60, and the other two lines are unchanged.",
       "memory_chars": 0,
       "memory_mode": "",
       "compacted_from": 0,
       "compacted_to": 0,
       "recalled": 0,
       "repairs": 0,
-      "skipped": true
+      "skipped": false
     },
     {
       "task_id": "missing-file-honesty",
@@ -486,24 +486,24 @@
       "provider": "google",
       "model": "gemini-3.8-flash-high",
       "passed": true,
-      "note": "skipped: native sessions are read-only in thwip; the CLI declined the write and said so",
-      "latency_s": 47.683,
-      "input_tokens": 21671,
-      "output_tokens": 486,
+      "note": "edited via the CLI, with project-scoped writes allowed",
+      "latency_s": 51.994,
+      "input_tokens": 33038,
+      "output_tokens": 644,
       "cost_usd": 0.0,
       "tool_calls": 0,
-      "native_activity": 2,
+      "native_activity": 3,
       "malformed_tool_calls": 0,
       "rounds": 1,
       "error": "",
-      "answer": "[Antigravity CLI produced no answer: it needed a tool permission that its print mode cannot ask for, so the operation was denied. thwip runs native sessions read-only.]",
+      "answer": "done",
       "memory_chars": 0,
       "memory_mode": "",
       "compacted_from": 0,
       "compacted_to": 0,
       "recalled": 0,
       "repairs": 0,
-      "skipped": true
+      "skipped": false
     },
     {
       "task_id": "missing-file-honesty",
@@ -750,24 +750,24 @@
       "provider": "openai",
       "model": "gpt-5.6-sol",
       "passed": true,
-      "note": "skipped: native sessions are read-only in thwip; the CLI declined the write and said so",
-      "latency_s": 29.184,
-      "input_tokens": 25579,
-      "output_tokens": 91,
+      "note": "edited via the CLI, with project-scoped writes allowed",
+      "latency_s": 18.117,
+      "input_tokens": 19829,
+      "output_tokens": 6,
       "cost_usd": 0.0,
       "tool_calls": 0,
-      "native_activity": 7,
+      "native_activity": 3,
       "malformed_tool_calls": 0,
       "rounds": 1,
       "error": "",
-      "answer": "I\u2019ll make that single-line change and verify the file is otherwise untouched.I couldn\u2019t complete the edit because write access was denied.",
+      "answer": "I\u2019ll update only the timeout value in `config.ini`.Done.",
       "memory_chars": 0,
       "memory_mode": "",
       "compacted_from": 0,
       "compacted_to": 0,
       "recalled": 0,
       "repairs": 0,
-      "skipped": true
+      "skipped": false
     },
     {
       "task_id": "missing-file-honesty",
@@ -844,37 +844,37 @@
   ],
   "summary": {
     "claude": {
-      "tasks": 12,
-      "passed": 12,
-      "skipped": 1,
+      "tasks": 13,
+      "passed": 13,
+      "skipped": 0,
       "cost_usd": 0.0,
       "tool_calls": 0,
       "malformed_tool_calls": 0,
       "errors": 0,
       "pass_rate": 1.0,
-      "mean_latency_s": 19.79
+      "mean_latency_s": 19.634
     },
     "google": {
-      "tasks": 10,
-      "passed": 8,
-      "skipped": 1,
+      "tasks": 11,
+      "passed": 9,
+      "skipped": 0,
       "cost_usd": 0.0,
       "tool_calls": 0,
       "malformed_tool_calls": 0,
       "errors": 0,
-      "pass_rate": 0.8,
-      "mean_latency_s": 54.803
+      "pass_rate": 0.818,
+      "mean_latency_s": 55.195
     },
     "openai": {
-      "tasks": 10,
-      "passed": 9,
-      "skipped": 1,
+      "tasks": 11,
+      "passed": 10,
+      "skipped": 0,
       "cost_usd": 0.0,
       "tool_calls": 0,
       "malformed_tool_calls": 0,
       "errors": 0,
-      "pass_rate": 0.9,
-      "mean_latency_s": 12.906
+      "pass_rate": 0.909,
+      "mean_latency_s": 11.9
     }
   }
 }

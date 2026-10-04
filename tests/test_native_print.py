@@ -296,3 +296,24 @@ async def test_antigravity_empty_answer_surfaces_the_denied_permission(monkeypat
     texts = [e.content for e in events if isinstance(e, TextDelta)]
     assert texts and "needed a tool permission" in texts[0] and "read-only" in texts[0]
     assert isinstance(events[-1], AgentDone)
+
+
+@pytest.mark.asyncio
+async def test_write_mode_changes_cli_flags(monkeypatch):
+    claude = PrintAgent("claude", ".")
+    calls = install_fake(monkeypatch, claude, [{"type": "result", "subtype": "success", "result": "ok", "usage": {}}])
+    await collect(claude)
+    assert "Edit(./**)" not in calls[0][0][calls[0][0].index("--allowedTools") + 1], "deny mode: read-only tools"
+    claude.writes = "allow"
+    calls.clear()
+    await collect(claude)
+    allowed = calls[0][0][calls[0][0].index("--allowedTools") + 1]
+    assert "Edit(./**)" in allowed and "Write(./**)" in allowed and "Read(./**)" in allowed
+    agy = PrintAgent("google", ".")
+    calls = install_fake(monkeypatch, agy, [{"event": "result", "result": {"status": "SUCCESS", "response": "ok", "usage": {}}}])
+    await collect(agy, model="gemini-3.8-flash-high")
+    assert "--mode" not in calls[0][0]
+    agy.writes = "allow"
+    calls.clear()
+    await collect(agy, model="gemini-3.8-flash-high")
+    assert calls[0][0][calls[0][0].index("--mode") + 1] == "accept-edits"

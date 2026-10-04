@@ -118,6 +118,14 @@ transcript, validated on load, shown by `/status`, and cleared by `/new`, `/clea
 `/compact`, and a project change. If a CLI can no longer continue a session, thwip says
 so and resends the full conversation to a fresh one.
 
+**Writes.** Native sessions are read-only by default: Claude Code and Antigravity get read-only tools,
+and Codex asks you before any write (you answer in thwip). `/writes allow` switches on project-scoped
+writes without prompts: Claude Code gets `Edit(./**)` and `Write(./**)`, Antigravity runs in
+`accept-edits` mode, and Codex uses a `workspace-write` sandbox. Files outside the project are still
+refused by Claude Code and Antigravity. `/writes deny` restores the default; the choice is saved under
+`[native] writes` in the config. The evaluation harness runs the file-edit task with writes allowed so
+all three CLIs are measured on a real edit.
+
 Native connections are read-only by default. Codex starts with a read-only sandbox
 and asks before operations outside it; approval requests appear in Thwip with the
 command or file list and default to denial. Claude Code and the Antigravity CLI run
@@ -174,6 +182,7 @@ notes are never touched.
 | Command | Action |
 |:---|:---|
 | `/prompt [show|set|reset|save]` | Your standing instructions for every assistant; thwip adds only a neutral note |
+| `/writes [allow|deny]` | Let native CLIs edit files inside the project without prompts (default deny) |
 | `/recall <words>` | Search earlier turns that compaction archived |
 | `/trace [n]` | Recent request traces with a per-provider summary |
 | `/memory` | Show this project's memory file |
@@ -302,11 +311,11 @@ Published at https://thwip.tanmaytiwari.me/#benchmark and stored under `docs/ben
 tasks against the three signed-in CLIs on one machine, 2026-10-04, run twice (home Wi-Fi, then a
 phone hotspot) with identical pass/fail results:
 
-| Provider | Passed (final run) | Not applicable | Mean latency, range across runs |
-|:--|:--|:--|:--|
-| Claude Code | 12 of 12 | 1 | 7.6 to 19.8 s |
-| Codex | 9 of 10 | 1 | 11.9 to 13.1 s |
-| Antigravity | 8 of 10 (9 of 11 in an earlier run) | 1 | 50.6 to 54.8 s |
+| Provider | Passed (final run) | Mean latency, range across runs |
+|:--|:--|:--|
+| Claude Code | 13 of 13 | 7.6 to 19.8 s |
+| Codex | 10 of 11 | 11.9 to 13.1 s |
+| Antigravity | 9 of 11 (one more in an earlier run) | 50.6 to 54.8 s |
 
 Three full runs on 2026-10-04 are stored (`home-wifi`, `hotspot`, `final`). Pass counts were stable
 for Claude Code and Codex; Antigravity varies by one depending on whether it reaches for a tool that
@@ -321,7 +330,7 @@ auto-denies any tool that needs a permission prompt and returns nothing, explain
 stderr; thwip surfaces that explanation. Antigravity's latency is its own per-turn work, not the
 network: 54 s on home Wi-Fi, 51 s on the hotspot; a kept-open process was tried and cut a turn to
 about 20 s but still carried 18 s of overhead and hung on the third turn, so it was not adopted. The
-file-edit task is not applicable to native sessions because thwip runs them read-only.
+file-edit task runs with `/writes allow` and all three CLIs edit the file correctly.
 
 ## Recall, structured outputs, tracing, guardrails
 

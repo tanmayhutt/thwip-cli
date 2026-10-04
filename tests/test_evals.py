@@ -154,3 +154,19 @@ def test_native_edit_is_not_applicable_and_native_leak_is_explained(tmp_path):
                __import__("thwip.evals.runner", fromlist=["EvalResult"]).EvalResult(task_id="u", provider="p", model="m", passed=True)]
     assert summarize(results)["p"] == {"tasks": 1, "passed": 1, "skipped": 1, "cost_usd": 0.0, "tool_calls": 0, "malformed_tool_calls": 0,
                                        "errors": 0, "pass_rate": 1.0, "mean_latency_s": 0.0}
+
+
+@pytest.mark.asyncio
+async def test_edit_task_measures_real_edits_when_writes_are_allowed(tmp_path):
+    from thwip.evals.tasks import Observation, check_edit_applied
+
+    (tmp_path / "config.ini").write_text("[server]\ntimeout = 60\nretries = 3\n")
+    ok, note = check_edit_applied(Observation(text="done"), {"project": tmp_path, "native": True, "writes_allowed": True})
+    assert ok and "project-scoped writes allowed" in note
+    (tmp_path / "config.ini").write_text("[server]\ntimeout = 30\nretries = 3\n")
+    ok, note = check_edit_applied(Observation(text="done"), {"project": tmp_path, "native": True, "writes_allowed": True})
+    assert not ok, "with writes allowed, an unchanged file is a real failure"
+    task = get_tasks(["tool-edit-file"])[0]
+    assert task.allow_writes
+    result = await run_task(FakeEvalAgent(), task)
+    assert result.passed and "edit_file" in result.note

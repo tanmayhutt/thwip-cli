@@ -42,3 +42,19 @@ def test_memory_and_endpoint_sections_round_trip(tmp_path, monkeypatch):
     assert reloaded.memory.vault == "/vault" and reloaded.memory.onboarded and reloaded.memory.scan == ["/a", "/b"]
     assert reloaded.endpoints == {"openai": "https://gateway.example/v1"}
     endpoints.configure({})
+
+
+def test_native_writes_round_trip(tmp_path, monkeypatch):
+    import tomllib
+
+    from thwip.config import ThwipConfig
+
+    monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path))
+    config = ThwipConfig()
+    assert config.native.writes == "deny"
+    config._apply_toml(tomllib.loads('[native]\nwrites = "allow"\n'))
+    assert config.native.writes == "allow"
+    config._apply_toml(tomllib.loads('[native]\nwrites = "whatever"\n'))
+    assert config.native.writes == "allow", "unknown values are ignored"
+    config.save()
+    assert ThwipConfig.load().native.writes == "allow"

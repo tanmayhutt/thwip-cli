@@ -85,6 +85,10 @@ are shown as a diff and written only after confirmation.
 Your standing instructions for every assistant. thwip imposes no persona; it adds only a short
 neutral note and the relevant project memory.
 .TP
+.B /writes [allow|deny]
+Whether native CLIs may edit files inside the project without a prompt. Default deny: Claude Code and
+Antigravity run read-only and Codex asks before each write.
+.TP
 .B /recall <words>
 Search earlier turns that compaction archived. Matching turns are also attached automatically when a
 later message refers to them.

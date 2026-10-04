@@ -40,6 +40,7 @@ class EvalTask:
     compact_before: bool = False      # compact the history first (summary + recent turns), as thwip does near the window
     recall_archive: bool = False      # after compaction, attach archived turns relevant to the prompt (thwip's recall)
     structured: bool = False          # ask through the structured-output path (JSON validated against the summary schema)
+    allow_writes: bool = False        # run native CLIs with project-scoped writes allowed (and approve Codex write requests)
     use_memory: bool = False          # give the model the fixture's context.md the way the REPL does
     kind: str = "model"               # "model" or "system"
     check: Callable[[Observation, Any], tuple[bool, str]] = lambda observation, context: (True, "")
@@ -168,7 +169,7 @@ def check_edit_applied(obs: Observation, ctx) -> tuple[bool, str]:
     """tools/file_editor.py edit_file: the file must end up with the replacement and nothing else changed."""
     project = ctx["project"]
     content = (project / "config.ini").read_text()
-    if ctx.get("native") and "timeout = 30" in content:
+    if ctx.get("native") and not ctx.get("writes_allowed") and "timeout = 30" in content:
         text = obs.text.lower().replace("\u2019", "'")
         declined = any(w in text for w in ("denied", "not applied", "couldn't", "could not", "can't", "cannot", "read-only", "permission"))
         if not text.strip():
@@ -182,7 +183,7 @@ def check_edit_applied(obs: Observation, ctx) -> tuple[bool, str]:
     used_edit = any(c.tool_name in {"edit_file", "write_file"} for c in obs.tool_calls)
     if not ctx.get("native") and not used_edit:
         return False, "the file changed without thwip's edit tool being called"
-    return True, f"edited via {[c.tool_name for c in obs.tool_calls] or 'native tools'}"
+    return True, f"edited via {[c.tool_name for c in obs.tool_calls] or 'the CLI, with project-scoped writes allowed'}"
 
 
 def check_honest_about_missing(obs: Observation, ctx) -> tuple[bool, str]:
@@ -295,6 +296,7 @@ TASKS: list[EvalTask] = [
         prompt="In config.ini, change the timeout from 30 to 60. Leave every other line as it is. Then say done.",
         fixture={"config.ini": "[server]\ntimeout = 30\nretries = 3\n"},
         tools=True,
+        allow_writes=True,
         check=check_edit_applied,
     ),
     EvalTask(
