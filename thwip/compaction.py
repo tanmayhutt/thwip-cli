@@ -48,6 +48,21 @@ def transcript(messages: Sequence[dict]) -> str:
                          if m.get("role") in {"user", "assistant"} and isinstance(m.get("content"), str))
 
 
+async def summarize_structured(worker, messages: Sequence[dict], model: str | None = None) -> tuple[str, int]:
+    """Summary as validated JSON (context, decisions, open_tasks), rendered to Markdown. Returns (text, repairs).
+
+    Falls back to the plain-text summary when the worker cannot produce valid JSON after repairs.
+    """
+    from thwip.structured import StructuredOutputError, render_summary, request_json, summary_schema
+
+    request = SUMMARY_REQUEST + transcript(messages)
+    try:
+        data, repairs = await request_json(worker, request, summary_schema(), model=model)
+        return render_summary(data), repairs
+    except StructuredOutputError:
+        return await summarize(worker, messages, model), -1
+
+
 async def summarize(worker, messages: Sequence[dict], model: str | None = None) -> str:
     """Ask the worker for the summary. Raises RuntimeError on a limit hit or an empty answer."""
     request = SUMMARY_REQUEST + transcript(messages)

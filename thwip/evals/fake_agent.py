@@ -8,6 +8,7 @@ harness's failure detection is tested too.
 
 from __future__ import annotations
 
+import json
 import re
 
 from thwip.agents.base import (
@@ -54,7 +55,12 @@ class FakeEvalAgent(BaseAgent):
         if last.get("role") == "tool":
             output = last.get("content", "")
             match = re.search(r"code word is (\w+)", output, re.IGNORECASE)
-            text = match.group(1) if match else ("I could not read that file: " + output[:80])
+            if output.startswith("Error:") and "does not exist" in output:
+                text = "That file does not exist in this project, so I cannot say what it fixed."
+            elif last.get("name") == "edit_file":
+                text = "Done: timeout changed from 30 to 60."
+            else:
+                text = match.group(1) if match else ("I could not read that file: " + output[:80])
             for piece in (text[:2], text[2:]):
                 if piece:
                     yield TextDelta(content=piece)
@@ -70,7 +76,21 @@ class FakeEvalAgent(BaseAgent):
                                     + "".join(f"- {fact}.\n" for fact in facts) + "Open tasks\n- None.")
             yield AgentDone(usage=usage)
             return
-        codeword = re.search(r"CODEWORD-(\w+)\?", prompt)
+        if "Return a single JSON object" in prompt:
+            facts = re.findall(r"CODEWORD-\w+ is \w+", prompt)
+            yield TextDelta(content=json.dumps({"context": ["conversation summary"], "decisions": facts, "open_tasks": []}))
+            yield AgentDone(usage=usage)
+            return
+        if tools and "change the timeout" in prompt.lower():
+            yield ToolUseStart(tool_id="call_edit", tool_name="edit_file",
+                               args={"file_path": "config.ini", "old_str": "timeout = 30", "new_str": "timeout = 60"})
+            yield AgentDone(usage=usage)
+            return
+        if tools and "release_notes" in prompt.lower():
+            yield ToolUseStart(tool_id="call_rn", tool_name="read_file", args={"file_path": "RELEASE_NOTES.md"})
+            yield AgentDone(usage=usage)
+            return
+        codeword = re.search(r"CODEWORD-(\w+)", prompt) if "?" in prompt else None
         if codeword:
             haystack = (system_prompt or "") + "\n" + "\n".join(str(m.get("content", "")) for m in messages[:-1])
             found = re.search(rf"CODEWORD-{codeword.group(1)}(?::| is) (\S+?)[.\s]", haystack + " ")

@@ -174,6 +174,8 @@ notes are never touched.
 | Command | Action |
 |:---|:---|
 | `/prompt [show|set|reset|save]` | Your standing instructions for every assistant; thwip adds only a neutral note |
+| `/recall <words>` | Search earlier turns that compaction archived |
+| `/trace [n]` | Recent request traces with a per-provider summary |
 | `/memory` | Show this project's memory file |
 | `/memory init [area]` | Create it from the template with detected stack and entry points |
 | `/memory update` | Ask the current model to revise it from the conversation; a diff is shown and written only after you confirm |
@@ -227,7 +229,9 @@ python -m thwip.evals --provider openai --task tool-read-file
 Each task names the file it tests: the streaming event contract in `agents/base.py`, exact
 instruction following, a tool round trip and the path guard in `tools/`, the consistency of
 the OpenAI and Anthropic tool schemas, deep recall from a long project memory file, recall
-across a provider handoff, recall after compaction, and the compaction worker rule. Native CLIs bring their own tools, so for them the tool
+across a provider handoff, recall after compaction, a real file edit, honesty about a missing file,
+recall of archived turns, a schema-valid structured summary, and the compaction worker rule. Thirteen
+tasks in total. Native CLIs bring their own tools, so for them the tool
 tasks score the final answer only and say so in the note.
 
 ## Live model lists
@@ -291,6 +295,45 @@ keep_recent_messages = 4
 
 The evaluation harness covers both: `compaction-recall` checks a fact from early in a long
 conversation survives summarisation, and `compaction-worker-never-active` checks the worker rule.
+
+## Benchmark
+
+Published at https://thwip.tanmaytiwari.me/#benchmark and stored under `docs/benchmark/`. First run,
+2026-10-04, thirteen tasks against the three signed-in CLIs on one machine:
+
+| Provider | Passed | Not applicable | Mean latency |
+|:--|:--|:--|:--|
+| Claude Code | 11 of 12 | 1 | 7.9 s |
+| Codex | 9 of 10 | 1 | 11.9 s |
+| Antigravity | 9 of 11 | 0 | 53.7 s (slow home network) |
+
+What failed, honestly: Claude Code and Codex read a file outside the project with their own tools,
+so thwip's path guard does not extend to native sessions (a documented limitation). Antigravity
+returned empty answers twice after its tools were declined in print mode. The file-edit task is not
+applicable to native sessions because thwip runs them read-only, and both CLIs said so.
+
+## Recall, structured outputs, tracing, guardrails
+
+**Recall.** Compaction archives the older turns inside the saved session instead of discarding them.
+When a later message refers to something archived, the matching turns are attached automatically as
+an excerpt (ranked with the same BM25 code as project memory), `/recall <words>` searches them by
+hand, and direct API models get a `search_history` tool. Nothing you said is ever out of reach.
+
+**Structured outputs.** Compaction summaries are requested as JSON matching a schema (context,
+decisions, open tasks), validated, and repaired by re-asking with the exact problem, up to two
+times, before being rendered to Markdown deterministically. If a model cannot produce valid JSON
+the plain-text summary is used and thwip says so. Code: `structured.py`.
+
+**Tracing.** Every request writes one line to `~/.thwip/traces.jsonl`: provider, model, kind (chat,
+compaction, eval), latency, tokens, estimated cost, tool calls, error. Measurements only, never
+text. `/trace [n]` shows the recent records and a per-provider summary.
+
+**Output guardrails.** Before an answer is stored, strings shaped like API keys, tokens, or private
+keys are masked and you are told; an empty answer is reported instead of silently saved. Code:
+`guardrails.py`.
+
+**Continuous integration.** Every push runs lint, the test suite, and the offline evaluation harness
+on Python 3.11 and 3.13; a failing task fails the build (`.github/workflows/ci.yml`).
 
 ## Usage-limit failover
 

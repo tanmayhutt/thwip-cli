@@ -21,6 +21,8 @@ SLASH_COMMANDS = [
     ("/copy", "Copy the last response to the clipboard"),
     ("/export", "Write the conversation to a Markdown file"),
     ("/prompt", "Show or set your standing instructions for every assistant"),
+    ("/recall", "Search earlier turns that were summarized away"),
+    ("/trace", "Recent request traces per provider"),
     ("/memory", "Show this project's memory file"),
     ("/memory update", "Let the current model update the memory from this conversation"),
     ("/memory sync", "File the project into the second-brain vault"),

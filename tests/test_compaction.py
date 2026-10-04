@@ -84,7 +84,7 @@ def cli(tmp_path, monkeypatch):
     cli.config = ThwipConfig(project=str(tmp_path), auto_save=False)
     cli.tool_manager = ToolManager(str(tmp_path))
     cli.session = Session(project_path=str(tmp_path), current_agent="a", current_model="a-model")
-    active, other = Agent("a"), Agent("b", reply="Context\n- CODEWORD is OLIVE")
+    active, other = Agent("a"), Agent("b", reply='{"context": ["long chat"], "decisions": ["CODEWORD is OLIVE"], "open_tasks": []}')
     cli.current_agent = active
     cli.registry = SimpleNamespace(get_ready_agents=lambda: [active, other], get_agent=lambda n: active)
     for i in range(6):
@@ -99,6 +99,8 @@ async def test_cmd_compact_uses_other_provider_and_keeps_recent_turns(cli):
     cli, active, other = cli
     assert await cli.cmd_compact() is True
     assert other.calls == 1 and active.calls == 0, "the active provider never writes its own summary"
+    assert "- CODEWORD is OLIVE" in cli.session.messages[0].content and "Decisions" in cli.session.messages[0].content
+    assert [m.content for m in cli.session.archive][:2] == ["question 0", "answer 0"], "older turns are archived, not lost"
     contents = [m.content for m in cli.session.messages]
     assert contents[0].startswith("Summary of the conversation so far") and "OLIVE" in contents[0]
     assert contents[-4:] == ["question 4", "answer 4", "question 5", "answer 5"]
@@ -137,3 +139,12 @@ def test_quota_warning_recommends_a_ready_alternative(cli, monkeypatch):
     active.limit_windows[0]["resets_at"] = 1790009999
     cli._quota_warning()
     assert len(printed) == 2, "a new window (new reset time) warns again"
+
+
+@pytest.mark.asyncio
+async def test_cmd_compact_falls_back_to_plain_text_when_worker_cannot_do_json(cli):
+    cli, _active, other = cli
+    other.reply = "Context\n- plain prose summary"
+    assert await cli.cmd_compact() is True
+    assert other.calls == 4, "two repairs after the first JSON attempt, then one plain-text request"
+    assert "plain prose summary" in cli.session.messages[0].content

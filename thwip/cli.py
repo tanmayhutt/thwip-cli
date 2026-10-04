@@ -31,7 +31,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from thwip import compaction
+from thwip import compaction, recall, tracing
 from thwip.agents import AgentRegistry
 from thwip.agents.base import (
     AgentDone,
@@ -47,6 +47,7 @@ from thwip.agents.base import (
 from thwip.agents.native_common import describe_limit_windows
 from thwip.config import DisplayConfig, ThwipConfig, get_config_dir
 from thwip.detector import SystemDetector
+from thwip.guardrails import check_output
 from thwip.handoff import build_handoff_report, local_capabilities, local_model
 from thwip.limits import UsageTracker
 from thwip.memory import ProjectMemory, Vault, detect_obsidian_vaults
@@ -69,6 +70,7 @@ from thwip.theme import (
     render_startup_banner,
 )
 from thwip.tools import ToolManager
+from thwip.utils import estimate_cost
 
 # prompt_toolkit's cursor-position query is answered by the terminal with an escape sequence.
 # During a long native turn nobody reads stdin, so the answer would be echoed as ^[ ... R and later
@@ -163,6 +165,7 @@ class ThwipCLI:
         self.detector = SystemDetector()
         self.usage_tracker = UsageTracker()
         self.tool_manager = ToolManager(self.config.project)
+        self.tool_manager.history_search = self._search_history
         self.session = Session(
             project_path=self.config.project,
             current_agent=self.config.default_agent,
@@ -444,6 +447,12 @@ class ThwipCLI:
         elif cmd == "/export":
             self.cmd_export(cmd_line.partition(" ")[2].strip())
 
+        elif cmd == "/recall":
+            self.cmd_recall(cmd_line.partition(" ")[2].strip())
+
+        elif cmd in ("/trace", "/traces"):
+            self.cmd_trace(arg1)
+
         elif cmd in ("/prompt", "/instructions"):
             await self.cmd_prompt(arg1, cmd_line.partition(" ")[2].partition(" ")[2].strip())
 
@@ -511,6 +520,7 @@ class ThwipCLI:
         self.session = loaded
         self.current_agent = agent
         self.tool_manager = ToolManager(str(project))
+        self.tool_manager.history_search = self._search_history
         print_success(f"Loaded session '{loaded.name}' with {len(loaded.messages)} messages.")
         return True
 
@@ -599,24 +609,40 @@ class ThwipCLI:
                           "If it has just hit a limit this will fail; connect another provider for a safer compaction.")
         else:
             print_info(f"Summarising {len(older)} older messages with {worker.display_name}; keeping the last {len(recent)} verbatim.")
+        started = time.perf_counter()
         with console.status("[dim]Compacting conversation...[/dim]"):
             try:
-                summary = await compaction.summarize(worker, older)
+                summary, repairs = await compaction.summarize_structured(worker, older)
             except TurnInterrupted:
                 raise
             except Exception as exc:
                 print_error(f"Compaction failed: {exc}")
                 return False
+        tracing.record(tracing.Trace(provider=worker.name, model=worker.get_default_model(), kind="compaction",
+                                     latency_s=round(time.perf_counter() - started, 3), native=bool(getattr(worker, "native_tools", False)),
+                                     session=self.session.name))
+        if repairs > 0:
+            print_info(f"Summary validated after {repairs} repair round(s) of malformed JSON.")
+        elif repairs < 0:
+            print_info("Summary accepted as plain text; the worker could not produce valid JSON.")
+        guard = check_output(summary)
+        if guard.flagged:
+            print_warning("Output guardrail on the summary: " + ", ".join(guard.findings) + ". Masked before storing.")
+            summary = guard.text
         before = len(self.session.messages)
-        kept = [m for m in self.session.messages if m.role in {"user", "assistant"}][-len(recent):] if recent else []
-        self.session.clear_context()
+        text_messages = [m for m in self.session.messages if m.role in {"user", "assistant"}]
+        kept = text_messages[-len(recent):] if recent else []
+        archived = text_messages[:len(text_messages) - len(kept)] if kept else text_messages
+        self.session.archive_messages(archived)
+        self.session.clear_context(keep_archive=True)
         self.session.add_user_message("Summary of the conversation so far, compacted by thwip:\n\n" + summary)
         self.session.add_assistant_message("Understood. I will continue from this summary.",
                                            agent_name=worker.name, model=worker.get_default_model(), company=worker.company)
         self.session.messages.extend(kept)
         self._compaction_offered_at = 0
         print_success(f"Compacted {before} messages into a summary plus the last {len(kept)} verbatim"
-                      f"{' because ' + reason if reason else ''}. Each provider gets the compact version on its next turn.")
+                      f"{' because ' + reason if reason else ''}. The {len(archived)} older turns stay searchable with /recall "
+                      "and are attached automatically when a later message refers to them.")
         return True
 
     def _context_pressure(self) -> tuple[int, int]:
@@ -810,6 +836,10 @@ class ThwipCLI:
             print_success("Saved to ~/.thwip/config.toml under [defaults] system_prompt.")
         else:
             print_info("Usage: /prompt [show|set <text>|reset|save]")
+
+    def _recall_note(self, text: str) -> str:
+        """Archived turns relevant to this message, if compaction has archived anything."""
+        return recall.render(recall.excerpt(self.session.archive, text)) if self.session.archive else ""
 
     def _memory_plan(self, text: str, native: bool) -> tuple[str, list[str]]:
         """Decide what project memory this turn carries and which chunk ids the native session will then hold.
@@ -1063,6 +1093,45 @@ class ThwipCLI:
         if await self._ask_yes_no(f"Update this project's memory ({cfg.file}) from the conversation before {reason}? [y/N]"):
             await self._memory_update(reason)
 
+    # --- Recall over compacted conversation, tracing ---
+
+    def _search_history(self, query: str) -> str:
+        """Tool and command backend: archived turns relevant to the query, or a plain 'nothing found'."""
+        found = recall.excerpt(self.session.archive, query or "", budget=3000, limit=6)
+        if not found:
+            return "No earlier conversation matched that query." if self.session.archive else "Nothing has been compacted yet; the full conversation is already in context."
+        return "\n\n".join(chunk.text for chunk in found)
+
+    def cmd_recall(self, query: str) -> None:
+        if not query:
+            print_info(f"Usage: /recall <words>. {len(self.session.archive)} archived message(s) are searchable.")
+            return
+        console.print(Text(self._search_history(query)))
+
+    def cmd_trace(self, arg: str = "") -> None:
+        """Show recent request traces and a per-provider summary."""
+        limit = int(arg) if arg.isdigit() else 15
+        rows = tracing.tail(limit)
+        if not rows:
+            print_info(f"No traces yet. Each request is recorded in {pretty_path(tracing.trace_path())}.")
+            return
+        table = Table(title=f"Last {len(rows)} requests", box=box.ROUNDED)
+        for column in ("when", "kind", "provider", "model", "latency s", "tokens in/out", "cost $", "tools", "error"):
+            table.add_column(column, overflow="fold")
+        for row in rows:
+            table.add_row(time.strftime("%H:%M:%S", time.localtime(row.get("ts", 0))), row.get("kind", ""), row.get("provider", ""),
+                          row.get("model", ""), f"{row.get('latency_s', 0):.2f}", f"{row.get('input_tokens', 0)}/{row.get('output_tokens', 0)}",
+                          f"{row.get('cost_usd', 0):.4f}", str(row.get("tool_calls", 0)), (row.get("error") or "")[:50])
+        console.print(table)
+        summary = Table(title="Per provider (these rows)", box=box.ROUNDED)
+        for column in ("provider", "requests", "mean latency s", "tokens in/out", "cost $", "tool calls", "errors"):
+            summary.add_column(column)
+        for name, item in tracing.summarize(rows).items():
+            summary.add_row(name, str(item["requests"]), f"{item['mean_latency_s']:.2f}", f"{item['input_tokens']}/{item['output_tokens']}",
+                            f"{item['cost_usd']:.4f}", str(item["tool_calls"]), str(item["errors"]))
+        console.print(summary)
+        console.print(Text(f"File: {pretty_path(tracing.trace_path())}. Records hold measurements only, never text.", style="dim"))
+
     def cmd_show_about(self) -> None:
         """Display the complete About section and navigation guide."""
         detected = len(self.detector.scan_all())
@@ -1164,6 +1233,8 @@ class ThwipCLI:
             ("!<command>", "Run a shell command in the project without a model"),
             ("@path in a message", "Attach a project file's content to your message"),
             ("/prompt [show|set <text>|reset|save]", "Your standing instructions for every assistant; thwip itself adds only a neutral note"),
+            ("/recall <words>", "Search earlier turns that compaction summarized away"),
+            ("/trace [n]", "Recent request traces: latency, tokens, cost, tool calls, errors per provider"),
             ("/memory [show|init|edit|update|sync|vault|link]", "Project memory file shared by every agent, filed into your second-brain vault"),
             ("/session save [name]", "Save current chat session"),
             ("/session load <name>", "Load a previously saved session"),
@@ -1653,6 +1724,7 @@ class ThwipCLI:
                 self.session.project_path = str(p)
                 self.session.native_sessions.clear()
                 self.tool_manager = ToolManager(str(p))
+                self.tool_manager.history_search = self._search_history
                 self.config.project = str(p)
                 self.config.save()
                 print_success(f"Project path changed to {p}. Native CLI sessions will start fresh here.")
@@ -1760,7 +1832,12 @@ class ThwipCLI:
         total_tokens = 0
         limit_hit = False
         native_session_id = ""
+        self._last_usage = (0, 0)
         memory_note, memory_chunks = self._memory_plan(text, native)
+        recall_note = self._recall_note(text)
+        if recall_note:
+            memory_note = f"{memory_note}\n\n{recall_note}".strip() if native else memory_note
+        turn_started = time.perf_counter()
         if hasattr(self.current_agent, "get_handoff_models"):
             report = build_handoff_report(self.session, self.current_agent, self.current_agent,
                                           self.session.current_model, tools)
@@ -1780,7 +1857,8 @@ class ThwipCLI:
             with Live(console=console, refresh_per_second=12) as live:
                 try:
                     chat_kwargs = {"messages": working_messages, "model": self.session.current_model,
-                                   "system_prompt": self._system_prompt_with_memory(text, native, tools_offered=bool(tools)),
+                                   "system_prompt": self._system_prompt_with_memory(text, native, tools_offered=bool(tools))
+                                   + (f"\n\n{recall_note}" if recall_note and not native else ""),
                                    "tools": tools,
                                    "stream": self.config.stream if tools is None else False}
                     if native:
@@ -1819,6 +1897,7 @@ class ThwipCLI:
                             elif isinstance(event, AgentDone):
                                 native_state = event.native_state
                                 native_session_id = str(event.native_session.get("id") or "") or native_session_id
+                                self._last_usage = (self._last_usage[0] + event.usage.input_tokens, self._last_usage[1] + event.usage.output_tokens)
                                 used = event.usage.input_tokens + event.usage.output_tokens
                                 total_tokens += used
                                 self.usage_tracker.record_usage(
@@ -1864,7 +1943,7 @@ class ThwipCLI:
                 action.append(str(display_args), style="dim")
                 console.print(action)
                 approved = True
-                read_only = request.tool_name in {"read_file", "list_files", "git_status", "git_diff"}
+                read_only = request.tool_name in {"read_file", "list_files", "git_status", "git_diff", "search_history"}
                 if self.config.confirm_tools and not read_only:
                     approved = await self._ask_yes_no("  Allow this action? [y/N]:")
                 output = (
@@ -1896,7 +1975,17 @@ class ThwipCLI:
         else:
             print_warning("Stopped after 8 consecutive tool rounds to prevent an infinite loop.")
 
+        tracing.record(tracing.Trace(provider=self.current_agent.name, model=self.session.current_model, kind="chat",
+                                     latency_s=round(time.perf_counter() - turn_started, 3),
+                                     input_tokens=self._last_usage[0], output_tokens=self._last_usage[1],
+                                     cost_usd=0.0 if native else round(estimate_cost(self.session.current_model, *self._last_usage), 6),
+                                     tool_calls=self.session.observed_tool_results - initial_tool_results, rounds=_tool_round + 1,
+                                     native=native, session=self.session.name, error="limit" if limit_hit else ""))
         if collected_text and not limit_hit:
+            guard = check_output(collected_text)
+            if guard.flagged:
+                print_warning("Output guardrail: " + ", ".join(guard.findings) + ". The stored answer is masked.")
+                collected_text = guard.text
             self.session.add_assistant_message(
                 content=collected_text,
                 agent_name=self.current_agent.name,

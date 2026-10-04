@@ -41,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task", action="append", help="Task id to run (repeatable). Default: all tasks")
     parser.add_argument("--list", action="store_true", help="List tasks and exit")
     parser.add_argument("--out", help="Write JSON results to this path")
+    parser.add_argument("--html", help="Write an HTML fragment (for the website benchmark section) to this path")
     parser.add_argument("--project", default=".", help="Working directory for native CLIs")
     parser.add_argument("--memory", default="retrieve", choices=["retrieve", "truncate"],
                         help="How project memory is sent for memory tasks: retrieve (query-aware) or truncate (first 8,000 chars)")
@@ -69,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     for column in ("task", "provider", "model", "pass", "latency s", "tokens in/out", "cost $", "tools", "memory chars", "note"):
         table.add_column(column, overflow="fold")
     for r in results:
-        table.add_row(r.task_id, r.provider, r.model, "[green]pass[/green]" if r.passed else "[red]FAIL[/red]",
+        table.add_row(r.task_id, r.provider, r.model, "[dim]n/a[/dim]" if r.note.startswith("skipped:") else "[green]pass[/green]" if r.passed else "[red]FAIL[/red]",
                       f"{r.latency_s:.2f}", f"{r.input_tokens}/{r.output_tokens}", f"{r.cost_usd:.4f}",
                       f"{r.tool_calls}" + (f" ({r.malformed_tool_calls} bad)" if r.malformed_tool_calls else ""),
                       f"{r.memory_chars} ({r.memory_mode})" if r.memory_chars else "-", r.note[:70])
@@ -80,11 +81,18 @@ def main(argv: list[str] | None = None) -> int:
     for column in ("provider", "pass rate", "mean latency s", "cost $", "tool calls", "malformed", "errors"):
         totals.add_column(column)
     for name, row in summary.items():
-        totals.add_row(name, f"{row['passed']}/{row['tasks']} ({row['pass_rate']:.0%})", f"{row['mean_latency_s']:.2f}",
+        totals.add_row(name, f"{row['passed']}/{row['tasks']} ({row['pass_rate']:.0%})" + (f", {row['skipped']} n/a" if row.get("skipped") else ""), f"{row['mean_latency_s']:.2f}",
                        f"{row['cost_usd']:.4f}", str(row["tool_calls"]), str(row["malformed_tool_calls"]), str(row["errors"]))
     console.print(totals)
     if args.out:
         console.print(f"[dim]Wrote {write_report(results, args.out)}[/dim]")
+    if args.html:
+        from pathlib import Path
+
+        from thwip.evals.runner import render_html_table
+
+        Path(args.html).write_text(render_html_table(results), encoding="utf-8")
+        console.print(f"[dim]Wrote {args.html}[/dim]")
     return 0 if all(r.passed for r in results) else 1
 
 

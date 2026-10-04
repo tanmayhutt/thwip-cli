@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - run: uv python install ${{ matrix.python }}
+      - run: uv sync --all-extras --python ${{ matrix.python }}
+      - name: Lint
+        run: uv run ruff check .
+      - name: Unit and integration tests (offline)
+        run: uv run pytest -q
+      - name: Evaluation harness (offline fake adapter; any failing task fails the build)
+        run: uv run python -m thwip.evals --provider fake --out evals-fake.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evals-fake-${{ matrix.python }}
+          path: evals-fake.json

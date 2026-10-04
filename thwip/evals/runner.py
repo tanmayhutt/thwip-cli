@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from thwip import tracing
 from thwip.agents.base import AgentDone, LimitHit, NativeActivity, TextDelta, ToolUseStart
 from thwip.evals.tasks import EvalTask, Observation
 from thwip.memory import ProjectMemory
@@ -47,6 +48,9 @@ class EvalResult:
     memory_mode: str = ""
     compacted_from: int = 0   # history messages before compaction (0 when the task does not compact)
     compacted_to: int = 0
+    recalled: int = 0         # archived turns attached by recall
+    repairs: int = 0          # structured-output repair rounds used
+    skipped: bool = False     # task not applicable to this provider (counted separately from pass/fail)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -78,7 +82,7 @@ async def run_task(agent, task: EvalTask, model: str | None = None, memory_mode:
         agent.project = str(project)
     try:
         if task.kind == "system":
-            result.passed, result.note = task.check(observation, {"tool_manager": manager})
+            result.passed, result.note = task.check(observation, {"tool_manager": manager, "project": project})
             return result
         tools = None
         if task.tools:
@@ -92,14 +96,35 @@ async def run_task(agent, task: EvalTask, model: str | None = None, memory_mode:
             system_prompt = f"{system_prompt}\n\n{injection}".strip()
             result.memory_chars = len(injection)
         history = list(task.history)
+        archived: list[dict] = []
         if task.compact_before and history:
             from thwip.compaction import compacted_messages, split_for_compaction, summarize
 
             older, recent = split_for_compaction(history, 4)
             summary = await summarize(agent, older, model=chosen)
             history = compacted_messages(summary, recent)
+            archived = older
             result.compacted_from = len(task.history)
             result.compacted_to = len(history)
+        if task.recall_archive and archived:
+            from thwip.recall import excerpt, render
+
+            note = render(excerpt(archived, task.prompt))
+            if note:
+                system_prompt = f"{system_prompt}\n\n{note}"
+                result.recalled = len(excerpt(archived, task.prompt))
+        if task.structured:
+            import json as _json
+
+            from thwip.structured import request_json, summary_schema
+
+            data, repairs = await request_json(agent, "Summarize the conversation so far.\n\n" +
+                                               "\n".join(f"[{m['role'].title()}] {m['content']}" for m in history),
+                                               summary_schema(), model=chosen)
+            observation.text = _json.dumps(data)
+            result.repairs = repairs
+            result.passed, result.note = task.check(observation, {"tool_manager": manager, "project": project})
+            return result
         messages: list[dict[str, Any]] = [*history, {"role": "user", "content": task.prompt}]
         for round_index in range(MAX_TOOL_ROUNDS):
             result.rounds = round_index + 1
@@ -147,13 +172,17 @@ async def run_task(agent, task: EvalTask, model: str | None = None, memory_mode:
         if result.error:
             result.passed, result.note = False, result.error
         else:
-            result.passed, result.note = task.check(observation, {"tool_manager": manager,
+            result.passed, result.note = task.check(observation, {"tool_manager": manager, "project": project,
                                                                   "native": bool(getattr(agent, "native_tools", False))})
     except Exception as exc:
         result.error = f"{type(exc).__name__}: {str(exc)[:200]}"
         result.passed, result.note = False, result.error
     finally:
         result.latency_s = round(time.perf_counter() - started, 3)
+        tracing.record(tracing.Trace(provider=result.provider, model=result.model, kind="eval", latency_s=result.latency_s,
+                                     input_tokens=result.input_tokens, output_tokens=result.output_tokens, cost_usd=result.cost_usd,
+                                     tool_calls=result.tool_calls, rounds=result.rounds, native=bool(getattr(agent, "native_tools", False)),
+                                     session=f"eval:{task.id}", error=result.error))
         if previous_project is not None:
             closer = getattr(agent, "close", None)
             if callable(closer):
@@ -203,8 +232,13 @@ def summarize(results: list[EvalResult]) -> dict[str, dict[str, Any]]:
     """Per-provider totals: pass rate, mean latency, cost, tool calls, malformed outputs."""
     summary: dict[str, dict[str, Any]] = {}
     for item in results:
-        row = summary.setdefault(item.provider, {"tasks": 0, "passed": 0, "latency_s": 0.0, "cost_usd": 0.0,
+        row = summary.setdefault(item.provider, {"tasks": 0, "passed": 0, "skipped": 0, "latency_s": 0.0, "cost_usd": 0.0,
                                                  "tool_calls": 0, "malformed_tool_calls": 0, "errors": 0})
+        if item.skipped or item.note.startswith("skipped:"):
+            item.skipped = True
+            row["skipped"] += 1
+            row["latency_s"] += item.latency_s
+            continue
         row["tasks"] += 1
         row["passed"] += int(item.passed)
         row["latency_s"] += item.latency_s
@@ -213,8 +247,9 @@ def summarize(results: list[EvalResult]) -> dict[str, dict[str, Any]]:
         row["malformed_tool_calls"] += item.malformed_tool_calls
         row["errors"] += int(bool(item.error))
     for row in summary.values():
+        runs = row["tasks"] + row["skipped"]
         row["pass_rate"] = round(row["passed"] / row["tasks"], 3) if row["tasks"] else 0.0
-        row["mean_latency_s"] = round(row["latency_s"] / row["tasks"], 3) if row["tasks"] else 0.0
+        row["mean_latency_s"] = round(row["latency_s"] / runs, 3) if runs else 0.0
         row["cost_usd"] = round(row["cost_usd"], 6)
         del row["latency_s"]
     return summary
@@ -228,3 +263,28 @@ def write_report(results: list[EvalResult], path: str | Path) -> Path:
                "summary": summarize(results)}
     target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return target
+
+
+def render_html_table(results: list[EvalResult], generated_at: str | None = None) -> str:
+    """A static HTML fragment for the website: one row per provider and task, plus per-provider totals."""
+    import html
+
+    summary = summarize(results)
+    generated_at = generated_at or time.strftime("%Y-%m-%d")
+    rows = []
+    for name, row in summary.items():
+        skipped = f" ({row['skipped']} not applicable)" if row.get("skipped") else ""
+        rows.append(f"<tr><td>{html.escape(name)}</td><td>{row['passed']}/{row['tasks']}{skipped}</td><td>{row['mean_latency_s']:.1f}</td>"
+                    f"<td>{row['tool_calls']}</td><td>{row['malformed_tool_calls']}</td><td>{row['errors']}</td></tr>")
+    detail = []
+    for r in results:
+        detail.append(f"<tr><td>{html.escape(r.task_id)}</td><td>{html.escape(r.provider)}</td>"
+                      f"<td>{'n/a' if r.skipped or r.note.startswith('skipped:') else 'pass' if r.passed else 'fail'}</td><td>{r.latency_s:.1f}</td><td>{r.input_tokens:,}</td>"
+                      f"<td>{html.escape(r.note[:90])}</td></tr>")
+    return (f'<p class="bench-meta">Measured {html.escape(generated_at)} on the maintainer\'s machine with the signed-in CLIs. '
+            f'{len(results)} runs.</p>\n'
+            '<table class="commands-table"><thead><tr><th>Provider</th><th>Passed</th><th>Mean latency s</th>'
+            '<th>Tool calls</th><th>Malformed</th><th>Errors</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table>\n'
+            '<details class="bench-detail"><summary>Every run</summary><table class="commands-table"><thead><tr><th>Task</th>'
+            '<th>Provider</th><th>Result</th><th>Latency s</th><th>Input tokens</th><th>Note</th></tr></thead><tbody>'
+            + "".join(detail) + '</tbody></table></details>')

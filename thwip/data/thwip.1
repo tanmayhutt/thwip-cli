@@ -85,6 +85,16 @@ are shown as a diff and written only after confirmation.
 Your standing instructions for every assistant. thwip imposes no persona; it adds only a short
 neutral note and the relevant project memory.
 .TP
+.B /recall <words>
+Search earlier turns that compaction archived. Matching turns are also attached automatically when a
+later message refers to them.
+.TP
+.B /trace [n]
+Recent request traces (latency, tokens, cost, tool calls, errors) with a per-provider summary. Stored
+in
+.I ~/.thwip/traces.jsonl
+as measurements only.
+.TP
 .B /key [provider]
 Enter a direct API key with hidden input.
 .TP

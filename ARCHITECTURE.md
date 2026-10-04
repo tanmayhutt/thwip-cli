@@ -19,6 +19,10 @@ Nothing else does the swapping part. That is the idea the project is built aroun
 | Tools the AI can use | Four: file editing, terminal, code running, git |
 | Tests | 21 test files, all offline using fake providers |
 | Cost tracking | Yes, per provider, saved between runs |
+| Tracing | Yes, since 2026-10-04: `tracing.py` writes one JSON line per request (measurements only); `/trace` reads them |
+| Structured outputs | Yes, since 2026-10-04: `structured.py` validates JSON against a schema and repairs by re-asking; used for compaction summaries |
+| Output guardrails | Yes, since 2026-10-04: `guardrails.py` masks secrets in answers before they are stored and flags empty answers |
+| Recall | Yes, since 2026-10-04: `recall.py` re-attaches archived turns that match a later message; `search_history` tool for direct models |
 | Evaluation | Started 2026-10-03: `thwip/evals/` with five tasks, an offline fake adapter, and `python -m thwip.evals`. Run live against Claude Code, Antigravity and Codex the same day |
 | Compaction | Yes, since 2026-10-03: `compaction.py` summarises older turns on a provider other than the active one, keeps recent turns verbatim, and is offered automatically near the context window. Quota warnings come from the CLIs' own usage reports |
 | Retrieval | Yes, since 2026-10-03: `retrieval.py` splits `context.md` at headings and ranks sections against the current message with BM25; the head always goes, the rest by relevance, within a budget. No embeddings or vector store yet; measured by `memory-deep-recall` |
@@ -121,7 +125,11 @@ sign-in rather than ask for an API key.
 | `session.py` | 291 | Holds the conversation. Converts it to a plain provider-neutral list when switching. Saves and reloads sessions |
 | `memory.py` | ~450 | Reads and writes the project's `context.md`, chooses which sections to send for a question, and syncs an Obsidian vault of project cards. Only ever overwrites files it created itself |
 | `retrieval.py` | ~140 | Heading-based chunking and BM25 ranking for project memory. Deterministic, no model, no network |
-| `compaction.py` | ~90 | Worker selection (never the active provider), the summary request, and the split between summarised and verbatim turns |
+| `recall.py` | ~70 | BM25 over archived turns; attaches the relevant ones to a later message |
+| `structured.py` | ~120 | Ask for JSON, validate against a small schema language, repair by re-asking, render summaries |
+| `tracing.py` | ~90 | One record per request, rotation, tail and per-provider summary |
+| `guardrails.py` | ~60 | Secret masking and empty-answer detection on model output |
+| `compaction.py` | ~110 | Worker selection (never the active provider), the summary request, and the split between summarised and verbatim turns |
 | `limits.py` | 112 | Records tokens and cost per provider, remembers when you hit a limit, saves it to disk |
 | `handoff.py` | 93 | Before a switch, estimates the request size, fingerprints the text, and reports which capabilities you gain or lose |
 | `utils.py` | 107 | Cost estimation, token formatting, stream collection, key masking |
@@ -189,22 +197,19 @@ Do item 1 first, and record `estimated_input_tokens` and cost per switch before 
 before-and-after number is the single most interesting thing you can put on a resume about this
 project, because it is a measurement, not a claim.
 
-## What is missing to call this an AI engineering project
+## What makes this an AI engineering project
 
-What is already here and counts: multi-provider integration, tool calling with provider-native
-continuations, streaming, human approval before any mutation, cost and token accounting, retries
-and fallback, offline tests with fake providers.
+Already here and counting: multi-provider integration over hand-written adapters, tool calling with
+provider-native continuations, streaming, human approval before any mutation, cost and token
+accounting, retries and fallback, warm sessions with incremental sync, usage-limit failover,
+project memory with BM25 retrieval, compaction on a non-active worker with structured and repaired
+summaries, recall over archived turns, request tracing, output guardrails, an evaluation harness
+with thirteen deterministic tasks run offline in CI and live across three providers, and a
+published benchmark on the website.
 
-What is missing:
-
-| Missing | Why it matters |
-|---|---|
-| Evaluation harness | No way to tell whether a change made the system better or worse. Every job description asks for this |
-| Published benchmark | Seven providers wired up and never compared. The comparison is the differentiator nobody else can make cheaply |
-| Retrieval | Project memory is truncated rather than searched |
-| Structured outputs with validation | Only one adapter touches schemas. No validate-and-repair loop |
-| Tracing | Tokens and cost are counted, but there is no per-request record of latency, tool calls and errors you can query |
-| Output guardrails | Path containment and approvals protect the filesystem. Nothing checks the model's output itself |
+What is deliberately not here: fine-tuning (no compute budget, weak evidence), a vector database
+(the corpus is small enough that keyword ranking is measured to be sufficient), and any framework
+rewrite (the adapter layer is the differentiator).
 
 ## Build order
 

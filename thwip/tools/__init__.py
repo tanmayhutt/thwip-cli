@@ -21,9 +21,23 @@ class ToolManager:
         self.terminal = TerminalRunner(project_path)
         self.code_runner = CodeRunner(project_path)
         self.git = GitOps(project_path)
+        # Set by the REPL: a function(query) -> str that searches earlier (compacted) conversation.
+        self.history_search = None
+
+    SEARCH_HISTORY_DESCRIPTION = ("Search earlier parts of this conversation that were summarized away. "
+                                  "Use it when the user refers to something said before that is not in the summary.")
 
     def get_openai_tools(self) -> list[dict[str, Any]]:
         """Return tool definitions formatted for OpenAI / DeepSeek / Groq."""
+        tools = self._openai_tools()
+        if self.history_search is not None:
+            tools.append({"type": "function", "function": {
+                "name": "search_history", "description": self.SEARCH_HISTORY_DESCRIPTION,
+                "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What to look for"}},
+                               "required": ["query"]}}})
+        return tools
+
+    def _openai_tools(self) -> list[dict[str, Any]]:
         return [
             {
                 "type": "function",
@@ -132,6 +146,14 @@ class ToolManager:
         ]
 
     def get_anthropic_tools(self) -> list[dict[str, Any]]:
+        tools = self._anthropic_tools()
+        if self.history_search is not None:
+            tools.append({"name": "search_history", "description": self.SEARCH_HISTORY_DESCRIPTION,
+                          "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "What to look for"}},
+                                           "required": ["query"]}})
+        return tools
+
+    def _anthropic_tools(self) -> list[dict[str, Any]]:
         """Return tool definitions formatted for Anthropic Claude."""
         return [
             {
@@ -255,6 +277,8 @@ class ToolManager:
             result = self.git.diff(args.get("staged", False))
         elif tool_name == "run_python":
             result = self.code_runner.run_python(args.get("code", ""))
+        elif tool_name == "search_history":
+            result = self.history_search(args.get("query", "")) if self.history_search else "Error: history search is unavailable."
         else:
             result = f"Error: Unknown tool '{tool_name}'."
 

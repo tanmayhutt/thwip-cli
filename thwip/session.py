@@ -69,13 +69,21 @@ class Session:
     # `synced` is how many portable messages that native session has already seen, so a provider
     # you return to receives only what it missed. Cleared whenever the text history is replaced.
     native_sessions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Turns that compaction summarised away. Kept so later questions can recall them; never sent whole.
+    archive: list[Message] = field(default_factory=list)
 
-    def clear_context(self) -> None:
+    def clear_context(self, keep_archive: bool = False) -> None:
         """Clear text, handoff accounting, and native session bookkeeping together."""
         self.messages.clear()
         self.observed_tool_results = 0
         self.tool_tracking_complete = True
         self.native_sessions.clear()
+        if not keep_archive:
+            self.archive.clear()
+        self.updated_at = time.time()
+
+    def archive_messages(self, messages: list[Message]) -> None:
+        self.archive.extend(m for m in messages if m.role in {"user", "assistant"})
         self.updated_at = time.time()
 
     def native_session(self, provider: str) -> dict[str, Any] | None:
@@ -176,6 +184,7 @@ class Session:
             "observed_tool_results": self.observed_tool_results,
             "tool_tracking_complete": self.tool_tracking_complete,
             "native_sessions": self.native_sessions,
+            "archive": [m.to_dict() for m in self.archive],
         }
         temporary_path: Path | None = None
         try:
@@ -245,6 +254,10 @@ class Session:
                     return None
                 if any(not isinstance(raw.get(key, ""), str) for key in ("agent_name", "model", "company")):
                     return None
+            archive = data.get("archive", [])
+            if not isinstance(archive, list) or any(not isinstance(raw, dict) or raw.get("role") not in {"user", "assistant"}
+                                                     or not isinstance(raw.get("content"), str) for raw in archive):
+                return None
             native_sessions = data.get("native_sessions", {})
             if not isinstance(native_sessions, dict):
                 return None
@@ -270,6 +283,7 @@ class Session:
                 native_sessions={k: {"id": v["id"], "synced": v.get("synced", 0), "model": v.get("model", ""),
                                      "chunks": [c for c in v.get("chunks", []) if isinstance(c, str)]}
                                  for k, v in native_sessions.items()},
+                archive=[Message.from_dict(m) for m in archive],
             )
             return session
         except Exception:
