@@ -185,8 +185,10 @@ class PrintAgent(BaseAgent):
     def _turn_command(self, prompt: str, model: str, system_prompt: str | None,
                       resume_id: str | None, new_id: str | None) -> tuple[list[str], str | None]:
         if self.name == "claude":
+            # Path patterns confine Claude Code's own read tools to the project folder; anything outside is
+            # a permission denial in print mode. Verified live 2026-10-04 (../secret.txt refused, note.txt read).
             command = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                       "--model", model, "--allowedTools", "Read,Glob,Grep,LS,WebFetch,WebSearch"]
+                       "--model", model, "--allowedTools", "Read(./**),Glob(./**),Grep(./**),WebFetch,WebSearch"]
             command += ["--resume", resume_id] if resume_id else ["--session-id", new_id]
             if system_prompt and not resume_id:
                 command += ["--append-system-prompt", system_prompt]

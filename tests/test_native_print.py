@@ -96,6 +96,8 @@ async def test_claude_streams_text_and_reports_usage(monkeypatch):
     command, stdin_text = calls[0]
     assert stdin_text == "hello" and "--model" in command and command[command.index("--model") + 1] == "fable"
     assert "--append-system-prompt" in command and "--dangerously-skip-permissions" not in command
+    allowed = command[command.index("--allowedTools") + 1]
+    assert "Read(./**)" in allowed and "Grep(./**)" in allowed and "Glob(./**)" in allowed, "reads are confined to the project"
 
 
 @pytest.mark.asyncio

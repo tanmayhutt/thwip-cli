@@ -304,15 +304,19 @@ phone hotspot) with identical pass/fail results:
 
 | Provider | Passed | Not applicable | Mean latency (hotspot) |
 |:--|:--|:--|:--|
-| Claude Code | 11 of 12 | 1 | 7.6 s |
+| Claude Code | 12 of 12 | 1 | 7.6 s |
 | Codex | 9 of 10 | 1 | 13.1 s |
 | Antigravity | 9 of 11 | 0 | 50.6 s |
 
-What failed, honestly: Claude Code and Codex read a file outside the project with their own tools,
-so thwip's path guard does not extend to native sessions (a documented limitation). Antigravity
-returned empty answers twice: its print mode auto-denies any tool that needs a permission prompt and
-returns nothing, explaining itself only on stderr; thwip now surfaces that explanation. Antigravity's
-latency is its own per-turn startup, not the network: 54 s on home Wi-Fi, 51 s on the hotspot. The
+What failed, honestly. Codex reads a file outside the project with its own shell tools: its read-only
+sandbox permits reads anywhere and auto-approves them, and no setting thwip can pass changes that.
+Claude Code used to do the same; since v1.14.0 thwip confines its read tools to the project with
+permission patterns (`Read(./**)`, `Glob(./**)`, `Grep(./**)`), verified live, so the path guard now
+holds for direct API models and Claude Code. Antigravity returned empty answers twice: its print mode
+auto-denies any tool that needs a permission prompt and returns nothing, explaining itself only on
+stderr; thwip surfaces that explanation. Antigravity's latency is its own per-turn work, not the
+network: 54 s on home Wi-Fi, 51 s on the hotspot; a kept-open process was tried and cut a turn to
+about 20 s but still carried 18 s of overhead and hung on the third turn, so it was not adopted. The
 file-edit task is not applicable to native sessions because thwip runs them read-only.
 
 ## Recall, structured outputs, tracing, guardrails
