@@ -302,11 +302,15 @@ Published at https://thwip.tanmaytiwari.me/#benchmark and stored under `docs/ben
 tasks against the three signed-in CLIs on one machine, 2026-10-04, run twice (home Wi-Fi, then a
 phone hotspot) with identical pass/fail results:
 
-| Provider | Passed | Not applicable | Mean latency (hotspot) |
+| Provider | Passed (final run) | Not applicable | Mean latency, range across runs |
 |:--|:--|:--|:--|
-| Claude Code | 12 of 12 | 1 | 7.6 s |
-| Codex | 9 of 10 | 1 | 13.1 s |
-| Antigravity | 9 of 11 | 0 | 50.6 s |
+| Claude Code | 12 of 12 | 1 | 7.6 to 19.8 s |
+| Codex | 9 of 10 | 1 | 11.9 to 13.1 s |
+| Antigravity | 8 of 10 (9 of 11 in an earlier run) | 1 | 50.6 to 54.8 s |
+
+Three full runs on 2026-10-04 are stored (`home-wifi`, `hotspot`, `final`). Pass counts were stable
+for Claude Code and Codex; Antigravity varies by one depending on whether it reaches for a tool that
+its print mode then denies.
 
 What failed, honestly. Codex reads a file outside the project with its own shell tools: its read-only
 sandbox permits reads anywhere and auto-approves them, and no setting thwip can pass changes that.
