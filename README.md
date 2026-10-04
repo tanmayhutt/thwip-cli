@@ -298,19 +298,22 @@ conversation survives summarisation, and `compaction-worker-never-active` checks
 
 ## Benchmark
 
-Published at https://thwip.tanmaytiwari.me/#benchmark and stored under `docs/benchmark/`. First run,
-2026-10-04, thirteen tasks against the three signed-in CLIs on one machine:
+Published at https://thwip.tanmaytiwari.me/#benchmark and stored under `docs/benchmark/`. Thirteen
+tasks against the three signed-in CLIs on one machine, 2026-10-04, run twice (home Wi-Fi, then a
+phone hotspot) with identical pass/fail results:
 
-| Provider | Passed | Not applicable | Mean latency |
+| Provider | Passed | Not applicable | Mean latency (hotspot) |
 |:--|:--|:--|:--|
-| Claude Code | 11 of 12 | 1 | 7.9 s |
-| Codex | 9 of 10 | 1 | 11.9 s |
-| Antigravity | 9 of 11 | 0 | 53.7 s (slow home network) |
+| Claude Code | 11 of 12 | 1 | 7.6 s |
+| Codex | 9 of 10 | 1 | 13.1 s |
+| Antigravity | 9 of 11 | 0 | 50.6 s |
 
 What failed, honestly: Claude Code and Codex read a file outside the project with their own tools,
 so thwip's path guard does not extend to native sessions (a documented limitation). Antigravity
-returned empty answers twice after its tools were declined in print mode. The file-edit task is not
-applicable to native sessions because thwip runs them read-only, and both CLIs said so.
+returned empty answers twice: its print mode auto-denies any tool that needs a permission prompt and
+returns nothing, explaining itself only on stderr; thwip now surfaces that explanation. Antigravity's
+latency is its own per-turn startup, not the network: 54 s on home Wi-Fi, 51 s on the hotspot. The
+file-edit task is not applicable to native sessions because thwip runs them read-only.
 
 ## Recall, structured outputs, tracing, guardrails
 

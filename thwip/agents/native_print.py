@@ -224,6 +224,7 @@ class PrintAgent(BaseAgent):
         process = await self._start_process(command, stdin_text)
         usage = TokenUsage()
         streamed_text = False
+        produced_text = False
         finished = False
         session_id = resume_id or (new_id if self.name == "claude" else None)
         try:
@@ -242,9 +243,16 @@ class PrintAgent(BaseAgent):
                         usage = item
                     elif isinstance(item, str):
                         if item and not streamed_text:
+                            produced_text = True
                             yield TextDelta(content=item)
                     elif isinstance(item, AgentDone):
                         finished = True
+                        if not streamed_text and not produced_text:
+                            # Antigravity's print mode auto-denies tools it cannot prompt for and then returns an empty
+                            # answer, explaining itself only on stderr. Surface that instead of a silent blank.
+                            note = await self._empty_answer_note(process)
+                            if note:
+                                yield TextDelta(content=note)
                         yield AgentDone(usage=usage, native_session={"id": session_id} if session_id else {})
                         return
                     else:
@@ -270,6 +278,20 @@ class PrintAgent(BaseAgent):
                 terminate_process_tree(process)
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(process.wait(), 5)
+
+    async def _empty_answer_note(self, process) -> str:
+        """Read what the CLI said on stderr when it returned nothing, scrubbed and bounded."""
+        if not process.stderr:
+            return f"[{self.display_name} returned an empty answer.]"
+        try:
+            raw = await asyncio.wait_for(process.stderr.read(4096), 2)
+        except Exception:
+            raw = b""
+        detail = scrub(raw.decode("utf-8", "replace"), 300)
+        if "auto-denied" in detail or "permission" in detail.lower():
+            return (f"[{self.display_name} produced no answer: it needed a tool permission that its print mode cannot ask for, "
+                    "so the operation was denied. thwip runs native sessions read-only.]")
+        return f"[{self.display_name} returned an empty answer{': ' + detail if detail else ''}]"
 
     async def _iterate(self, process):
         deadline = asyncio.get_running_loop().time() + TURN_TIMEOUT

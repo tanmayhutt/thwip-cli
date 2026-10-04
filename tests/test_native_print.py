@@ -283,3 +283,14 @@ async def test_antigravity_conversation_resume_and_fallback(monkeypatch):
     assert "[User]\nhello" in attempts[1][attempts[1].index("--print") + 1]
     assert any(isinstance(e, NativeActivity) and "unavailable" in e.description for e in events)
     assert events[-1].native_session == {"id": "conv-1"}
+
+
+@pytest.mark.asyncio
+async def test_antigravity_empty_answer_surfaces_the_denied_permission(monkeypatch):
+    agent = PrintAgent("google", ".")
+    install_fake(monkeypatch, agent, [{"event": "result", "result": {"status": "SUCCESS", "response": "", "usage": {}}}],
+                 stderr=b"jetski: no output produced \xe2\x80\x94 a tool required the write_file permission that headless mode cannot prompt for, so it was auto-denied.")
+    events = await collect(agent, model="gemini-3.8-flash-high")
+    texts = [e.content for e in events if isinstance(e, TextDelta)]
+    assert texts and "needed a tool permission" in texts[0] and "read-only" in texts[0]
+    assert isinstance(events[-1], AgentDone)
