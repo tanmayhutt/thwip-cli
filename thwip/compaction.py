@@ -11,6 +11,7 @@ Vocabulary:
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import Sequence
 
 from thwip.agents.base import AgentDone, LimitHit, TextDelta
@@ -20,13 +21,46 @@ class CompactionUnavailable(RuntimeError):
     """The worker could not produce a summary (limit hit or empty answer)."""
 
 
-SUMMARY_SYSTEM_PROMPT = "You write faithful, compact summaries for another assistant that will continue the work."
-
+SUMMARY_SYSTEM_PROMPT = ("You write faithful, compact summaries for another assistant that will continue the work. "
+                         "When unsure whether a detail matters, keep it.")
 SUMMARY_REQUEST = (
-    "Summarize the conversation below for another assistant that will continue it. Keep every decision, "
-    "requirement, file path, command, error, code word, URL, and open task exactly as stated. Use short bullet points "
-    "under the headings Context, Decisions, Open tasks. Do not add commentary.\n\n"
+    "Summarize the conversation below for another assistant that will continue it with no other memory of it.\n"
+    "Rules:\n"
+    "- Copy every file path, command, error message, code word, identifier, URL, number and version exactly as written; "
+    "never paraphrase these.\n"
+    "- Keep every decision with its reason, every requirement and constraint the user stated, and every preference "
+    "about how the user wants to work.\n"
+    "- Keep every open task, question, and anything tried that failed, so it is not tried again.\n"
+    "- Drop only greetings, repetition, and reasoning that led nowhere.\n"
+    "- Short bullet points under the headings Context, Decisions, Open tasks. No commentary.\n\n"
 )
+
+# Things a summary must carry word for word. They are extracted deterministically from the old turns and checked
+# against the summary; a summary missing any of them is sent back with the exact list.
+_ANCHOR_PATTERNS = [
+    re.compile(r"`([^`\n]{2,120})`"),                                      # anything the conversation put in code marks
+    re.compile(r"(?<![\w/.])((?:~|\.{1,2})?/?[\w.\-]+(?:/[\w.\-]+)+)"),    # paths with at least one slash
+    re.compile(r"\b([\w.\-]+\.(?:py|js|ts|tsx|md|toml|json|yml|yaml|txt|ini|cfg|sh|html|css|rs|go|java|c|h|cpp))\b"),
+    re.compile(r"\b(https?://[^\s)\]]+)"),                                  # URLs
+    re.compile(r"\b([A-Z][A-Z0-9_-]{3,})\b"),                                # CODE-WORDS and CONSTANTS
+    re.compile(r"\bv?(\d+\.\d+(?:\.\d+)+)\b"),                            # versions
+]
+
+
+def extract_anchors(text: str) -> list[str]:
+    """Exact strings the summary must contain, in order of first appearance, without duplicates."""
+    found: list[str] = []
+    for pattern in _ANCHOR_PATTERNS:
+        for match in pattern.findall(text):
+            item = match.strip()
+            if len(item) >= 2 and item not in found:
+                found.append(item)
+    return found
+
+
+def missing_anchors(summary: str, anchors: Sequence[str]) -> list[str]:
+    lowered = summary.lower()
+    return [a for a in anchors if a.lower() not in lowered]
 
 
 def choose_worker(active, ready: Sequence, chain: Sequence[str] = ()):
@@ -54,13 +88,32 @@ async def summarize_structured(worker, messages: Sequence[dict], model: str | No
     Falls back to the plain-text summary when the worker cannot produce valid JSON after repairs.
     """
     from thwip.structured import StructuredOutputError, render_summary, request_json, summary_schema
-
-    request = SUMMARY_REQUEST + transcript(messages)
+    text = transcript(messages)
+    request = SUMMARY_REQUEST + text
+    anchors = extract_anchors(text)
     try:
         data, repairs = await request_json(worker, request, summary_schema(), model=model)
-        return render_summary(data), repairs
     except StructuredOutputError:
         return await summarize(worker, messages, model), -1
+    summary = render_summary(data)
+    # Coverage check: every exact item from the old turns must appear in the summary. Two rounds, then whatever is
+    # still missing is appended verbatim so nothing is silently dropped.
+    for _round in range(2):
+        missing = missing_anchors(summary, anchors)
+        if not missing:
+            break
+        fix = (request + "\n\nYour previous summary left out these exact items; include each one verbatim where it "
+               "belongs:\n- " + "\n- ".join(missing[:40]) + "\n\nPrevious summary:\n" + summary)
+        try:
+            data, more = await request_json(worker, fix, summary_schema(), model=model)
+        except StructuredOutputError:
+            break
+        repairs += more + 1
+        summary = render_summary(data)
+    missing = missing_anchors(summary, anchors)
+    if missing:
+        summary += "\nExact items from earlier turns\n" + "\n".join(f"- {m}" for m in missing[:40])
+    return summary, repairs
 
 
 async def summarize(worker, messages: Sequence[dict], model: str | None = None) -> str:

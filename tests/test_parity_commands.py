@@ -308,3 +308,53 @@ def test_current_folder_wins_over_the_remembered_project(tmp_path, monkeypatch):
     monkeypatch.chdir(Path.home())
     assert Path(ThwipCLI().config.project) == remembered.resolve(), "from home, the remembered project is the default"
     assert Path(ThwipCLI(project=str(here)).config.project) == here.resolve(), "--project always wins"
+
+
+def test_custom_provider_config_round_trip_and_registry(tmp_path, monkeypatch):
+    import tomllib
+
+    from thwip.agents.custom_agent import CustomAgent
+
+    monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path / "config"))
+    config = ThwipConfig()
+    config._apply_toml(tomllib.loads(
+        '[providers.local]\nbase_url = "http://localhost:1234/v1/"\nmodels = ["qwen", "llama"]\ndefault_model = "llama"\n'
+        '[providers.bad]\nmodels = ["x"]\n'))
+    assert set(config.providers) == {"local"}, "an entry without base_url is ignored"
+    assert config.providers["local"]["base_url"] == "http://localhost:1234/v1"
+    config.save()
+    reloaded = ThwipConfig.load()
+    assert reloaded.providers["local"]["models"] == ["qwen", "llama"]
+    registry = AgentRegistry(reloaded)
+    agent = registry.get_agent("local")
+    assert isinstance(agent, CustomAgent) and agent.is_configured() and agent.get_default_model() == "llama"
+    assert agent.get_model_info("anything-else") is not None, "unknown IDs are left to the server"
+    assert agent._get_api_key() == "local" and not agent.responses_api
+    assert agent in registry.get_ready_agents()
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_lists_models_from_the_server(monkeypatch):
+    import httpx
+
+    from thwip.agents.custom_agent import CustomAgent
+
+    def handler(request):
+        assert request.url.path.endswith("/models") and request.headers.get("authorization") == "Bearer k"
+        return httpx.Response(200, json={"data": [{"id": "served-a"}, {"id": "served-b"}]})
+    transport = httpx.MockTransport(handler)
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=transport, **kw))
+    monkeypatch.setenv("MY_KEY", "k")
+    agent = CustomAgent("srv", {"base_url": "http://srv/v1", "api_key_env": "MY_KEY", "models": ["mine"]})
+    await agent.refresh_models()
+    assert [m.id for m in agent.available_models] == ["mine", "served-a", "served-b"] and agent.get_default_model() == "mine"
+
+
+@pytest.mark.asyncio
+async def test_image_mentions_go_to_the_cli_image_input(cli, tmp_path, monkeypatch):
+    (tmp_path / "shot.png").write_bytes(b"\x89PNG fake")
+    (tmp_path / "notes.txt").write_text("plain text")
+    text = cli._expand_mentions("look at @shot.png and @notes.txt")
+    assert cli._pending_images == [str((tmp_path / "shot.png").resolve())]
+    assert "Attached file: notes.txt" in text and "PNG" not in text, "images are never read as text"

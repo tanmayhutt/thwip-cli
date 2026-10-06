@@ -89,6 +89,10 @@ neutral note and the relevant project memory.
 Pick a known project, create one, or switch to a path. Sessions remember their project, so thwip can
 run from the home folder; started there, it asks which project to work on.
 .TP
+.B /providers [add|remove <name>]
+Your own models: any OpenAI-compatible server, local or hosted. /providers add asks for a name, the
+base URL, an optional key variable and optional model IDs, then lists the server's models.
+.TP
 .B /permissions
 How each native CLI's own permission questions reach you. Codex and Claude Code ask through thwip;
 Antigravity cannot ask in headless mode and declines such tools itself.

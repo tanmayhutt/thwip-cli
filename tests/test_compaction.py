@@ -148,3 +148,43 @@ async def test_cmd_compact_falls_back_to_plain_text_when_worker_cannot_do_json(c
     assert await cli.cmd_compact() is True
     assert other.calls == 4, "two repairs after the first JSON attempt, then one plain-text request"
     assert "plain prose summary" in cli.session.messages[0].content
+
+
+class SequenceAgent(Agent):
+    """Replies in order; used to prove the coverage check sends missing exact items back."""
+
+    def __init__(self, name, replies):
+        super().__init__(name)
+        self.replies = list(replies)
+        self.prompts = []
+
+    async def chat(self, messages=None, **kwargs):
+        self.calls += 1
+        self.prompts.append(messages[-1]["content"])
+        yield TextDelta(content=self.replies.pop(0) if self.replies else self.replies_last)
+        yield AgentDone()
+
+    replies_last = ""
+
+
+@pytest.mark.asyncio
+async def test_structured_summary_sends_back_missing_exact_items():
+    from thwip.compaction import extract_anchors, missing_anchors, summarize_structured
+
+    history = [{"role": "user", "content": "Edit thwip/cli.py; the code word is PLUM-7 and the docs are at https://x.y/z"},
+               {"role": "assistant", "content": "Done, see `uv lock` output; released v1.16.2."}]
+    anchors = extract_anchors(transcript(history))
+    assert {"thwip/cli.py", "PLUM-7", "https://x.y/z", "uv lock", "1.16.2"} <= set(anchors)
+    incomplete = '{"context": ["edited the CLI file"], "decisions": [], "open_tasks": []}'
+    complete = ('{"context": ["Edit thwip/cli.py; code word PLUM-7; docs https://x.y/z"], '
+                '"decisions": ["ran `uv lock`; released v1.16.2"], "open_tasks": []}')
+    worker = SequenceAgent("w", [incomplete, complete])
+    summary, repairs = await summarize_structured(worker, history)
+    assert worker.calls == 2 and "left out these exact items" in worker.prompts[1] and "PLUM-7" in worker.prompts[1]
+    assert not missing_anchors(summary, anchors) and repairs == 1
+
+    # When the worker keeps leaving items out, they are appended verbatim rather than lost.
+    stubborn = SequenceAgent("s", [incomplete, incomplete, incomplete])
+    stubborn.replies_last = incomplete
+    summary, _ = await summarize_structured(stubborn, history)
+    assert "Exact items from earlier turns" in summary and "PLUM-7" in summary and "https://x.y/z" in summary

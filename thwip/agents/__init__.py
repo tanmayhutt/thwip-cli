@@ -54,6 +54,11 @@ class AgentRegistry:
                 inst = agent_cls(api_key=key)
 
             self._agents[name] = inst
+        # Your own OpenAI-compatible providers from [providers.<name>].
+        from thwip.agents.custom_agent import CustomAgent
+        for name, spec in (getattr(self.config, "providers", None) or {}).items():
+            if name not in self._agents:
+                self._agents[name] = CustomAgent(name, spec)
 
     def get_agent(self, name: str) -> BaseAgent | None:
         """Get agent by name or alias."""
@@ -75,7 +80,10 @@ class AgentRegistry:
             "local": "ollama",
             "openrouter": "openrouter",
         }
-        normalized = alias_map.get(name.lower().strip(), name.lower().strip())
+        wanted = name.lower().strip()
+        if wanted in self._agents:
+            return self._agents[wanted]   # a provider you named yourself wins over built-in aliases
+        normalized = alias_map.get(wanted, wanted)
         return self._agents.get(normalized)
 
     async def connect_native_agents(self, project: str) -> None:

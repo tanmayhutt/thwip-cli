@@ -287,3 +287,18 @@ async def test_codex_thread_is_reused_across_turns(monkeypatch):
     [e async for e in agent.chat([{'role': 'user', 'content': 'b'}], model='future-model', resume={'id': thread_id, 'synced': 0})]
     methods = [m for m, _ in rpc.requests]
     assert 'thread/start' not in methods and 'thread/resume' not in methods, 'the open thread is reused without re-opening'
+
+
+@pytest.mark.asyncio
+async def test_codex_turn_carries_local_images(monkeypatch, tmp_path):
+    agent = NativeAgent('openai', '.')
+    rpc = FakeRPC('openai')
+    async def connect():
+        return rpc
+    monkeypatch.setattr(agent, '_connect', connect)
+    shot = tmp_path / 'shot.png'
+    shot.write_bytes(b'png')
+    [e async for e in agent.chat([{'role': 'user', 'content': 'what is this'}], model='future-model', images=[str(shot)])]
+    turn = next(p for m, p in rpc.requests if m == 'turn/start')
+    assert turn['input'][0] == {'type': 'text', 'text': 'what is this'}
+    assert turn['input'][1] == {'type': 'localImage', 'path': str(shot)}

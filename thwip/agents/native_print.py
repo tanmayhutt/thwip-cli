@@ -16,9 +16,11 @@ tool that needs one is declined by the CLI itself, and thwip shows its explanati
 from __future__ import annotations
 
 import asyncio
+import base64
 import collections
 import contextlib
 import json
+import mimetypes
 import os
 import shutil
 import uuid
@@ -272,7 +274,25 @@ class PrintAgent(BaseAgent):
 
     # --- Chat ---
 
-    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None, memory_note=""):
+    supports_images = True   # passed through to the CLI's own image input
+
+    @staticmethod
+    def _image_blocks(images) -> list[dict]:
+        """Anthropic-style image blocks (base64) for Claude Code's stream-json input."""
+        blocks = []
+        for path in images or []:
+            path = Path(path)
+            media = mimetypes.guess_type(path.name)[0] or "image/png"
+            try:
+                data = base64.b64encode(path.read_bytes()).decode()
+            except OSError:
+                continue
+            blocks.append({"type": "image", "source": {"type": "base64", "media_type": media, "data": data}})
+        return blocks
+
+    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None, memory_note="",
+                   images=None):
+        self._images = list(images or [])
         chosen = model or self.get_default_model()
         resume_id = resume.get("id") if isinstance(resume, dict) else None
         synced = resume.get("synced", 0) if isinstance(resume, dict) else 0
@@ -313,7 +333,9 @@ class PrintAgent(BaseAgent):
             # The initialize handshake is what makes Claude Code route can_use_tool questions over the stream.
             await self._send(process, {"type": "control_request", "request_id": "thwip-init",
                                        "request": {"subtype": "initialize"}})
-            await self._send(process, {"type": "user", "message": {"role": "user", "content": prompt}})
+            blocks = self._image_blocks(getattr(self, "_images", []))
+            content = [{"type": "text", "text": prompt}, *blocks] if blocks else prompt
+            await self._send(process, {"type": "user", "message": {"role": "user", "content": content}})
             async for event in self._iterate(process):
                 kind = event.get("type")
                 if kind == "system" and event.get("session_id"):
@@ -386,6 +408,10 @@ class PrintAgent(BaseAgent):
         streamed_text = produced_text = False
         session_id = kept.conversation_id
         try:
+            images = [str(Path(p)) for p in getattr(self, "_images", [])]
+            if images:
+                # Antigravity's headless input takes text only; the paths are named so its own tools can open them.
+                prompt = prompt + "\n\nAttached image files (open them with your own tools): " + ", ".join(images)
             await self._send(process, {"event": "user", "message": {"role": "user", "content": prompt}})
             async for event in self._iterate(process):
                 kind = event.get("event") or event.get("type")

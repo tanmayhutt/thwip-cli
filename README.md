@@ -127,6 +127,29 @@ needs one is declined by the CLI itself and thwip shows its explanation; its own
 flag is the only alternative. `/permissions` prints this summary. The evaluation harness approves the
 CLIs' write questions for the file-edit task so all three are measured on a real edit.
 
+**Your own models.** `/providers add` walks you through adding any server that speaks the OpenAI
+chat protocol: llama.cpp, LM Studio, vLLM, Ollama's `/v1` endpoint, text-generation-webui, a company
+gateway, or a hosted API. You give it a name, the base URL ending in `/v1`, optionally the name of an
+environment variable holding a key, and optionally model IDs; otherwise thwip lists the models from
+the server. The provider then appears in `/switch`, in the fallback chain, and as a compaction worker
+like any other. Saved under `[providers.<name>]` in the config:
+
+```toml
+[providers.local]
+base_url = "http://localhost:1234/v1"
+models = ["qwen2.5-coder", "llama3.3"]
+default_model = "qwen2.5-coder"
+```
+
+**Images.** `@shot.png` in a message sends the image to the CLI's own image input instead of reading
+it as text: Codex receives the local path, Claude Code receives the image inline. Antigravity's
+headless input is text only, so it receives the path and may open it with its own tools. Direct API
+providers do not take images through thwip yet.
+
+**Windows.** The package is pure Python. CI runs the full test suite, the offline harness and the
+build on a Windows runner as well as Linux, so a wheel built anywhere runs on macOS, Linux and
+Windows. Native CLIs must themselves support the platform.
+
 **Before a switch.** A switch sends the live conversation to the new CLI. When that transfer would
 fill a large share of the new CLI's window, thwip says how many tokens it is and offers to compact
 first, so the handoff is small. `/handoff` shows the same numbers without switching.

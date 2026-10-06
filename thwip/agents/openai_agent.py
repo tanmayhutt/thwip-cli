@@ -101,6 +101,8 @@ class OpenAIAgent(BaseAgent):
         ),
     ]
 
+    responses_api = True   # OpenAI itself; compatible servers (custom providers) use chat completions only
+
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key
         self._client = None
@@ -297,8 +299,8 @@ class OpenAIAgent(BaseAgent):
 
         client = self._ensure_client()
         model = model or self.get_default_model()
-        if tools:
-            stream = False
+        if tools and self.responses_api:
+            stream = False   # tool rounds go through the Responses API
 
         # Build messages with system prompt
         api_messages: list[dict[str, Any]] = []

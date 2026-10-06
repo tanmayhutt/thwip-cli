@@ -78,6 +78,9 @@ from thwip.utils import estimate_cost
 os.environ.setdefault("PROMPT_TOOLKIT_NO_CPR", "1")
 
 
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
 class QuietTerminal:
     """Turn off keyboard echo while a turn runs and drop stray input before the next prompt."""
 
@@ -232,8 +235,8 @@ class ThwipCLI:
         print_info("Connecting installed agents using their existing sign-ins...")
         await self.registry.connect_native_agents(str(Path(self.session.project_path).resolve()))
         self.current_agent = self._resolve_initial_agent()
-        if getattr(self.current_agent, "native_tools", False):
-            self.session.current_model = self.current_agent.get_default_model()
+        if getattr(self.current_agent, "native_tools", False) or self.current_agent.name in (getattr(self.config, "providers", None) or {}):
+            self.session.current_model = self.current_agent.get_default_model()   # the global default model is not theirs
         # 1. Detect agents on system
         self.detector.scan_all()
         all_agents = self.registry.list_agents()
@@ -462,6 +465,9 @@ class ThwipCLI:
 
         elif cmd == "/export":
             self.cmd_export(cmd_line.partition(" ")[2].strip())
+
+        elif cmd == "/providers":
+            await self.cmd_providers(arg1.lower(), arg2)
 
         elif cmd in ("/permissions", "/approvals"):   # Codex calls it /approvals
             self.cmd_permissions()
@@ -819,6 +825,7 @@ class ThwipCLI:
     def _expand_mentions(self, text: str) -> str:
         """Attach files referenced as @path (inside the project) to the message, like @ mentions in Codex and Claude Code."""
         mentions = re.findall(r"(?<!\S)@([\w./\-]+)", text)
+        self._pending_images = []
         if not mentions:
             return text
         attachments = []
@@ -826,6 +833,11 @@ class ThwipCLI:
         for mention in dict.fromkeys(mentions):
             candidate = (project / mention).resolve()
             if not candidate.is_file() or project not in candidate.parents:
+                continue
+            if candidate.suffix.lower() in IMAGE_SUFFIXES:
+                # Images go to the CLI's own image input (Codex, Claude Code), never read as text.
+                self._pending_images.append(str(candidate))
+                print_info(f"Attached image {mention}")
                 continue
             content = self.tool_manager.execute_tool("read_file", {"file_path": mention, "max_lines": 400})
             attachments.append(f"[Attached file: {mention}]\n{content}")
@@ -1149,6 +1161,73 @@ class ThwipCLI:
             return "No earlier conversation matched that query." if self.session.archive else "Nothing has been compacted yet; the full conversation is already in context."
         return "\n\n".join(chunk.text for chunk in found)
 
+    async def cmd_providers(self, sub: str = "", rest: str = "") -> None:
+        """/providers [add|remove <name>|list]: your own OpenAI-compatible models, local or hosted."""
+        providers = getattr(self.config, "providers", None)
+        if providers is None:
+            self.config.providers = providers = {}
+        if sub == "add":
+            console.print(Text(
+                "Add any server that speaks the OpenAI chat protocol: llama.cpp, LM Studio, vLLM, Ollama (/v1), "
+                "text-generation-webui, a company gateway, or a hosted API.\n"
+                "You need its base URL ending in /v1, and a key only if the server asks for one.", style="dim"))
+            name = (await self._ask_text("Name for this provider (e.g. local, lmstudio, work):")).strip().lower().replace(" ", "-")
+            if not name:
+                print_info("Nothing added.")
+                return
+            base_url = (await self._ask_text("Base URL (e.g. http://localhost:1234/v1):")).strip().rstrip("/")
+            if not base_url.startswith(("http://", "https://")):
+                print_error("The base URL must start with http:// or https://.")
+                return
+            key_env = (await self._ask_text("Environment variable holding the API key (Enter if none):")).strip()
+            models_text = (await self._ask_text("Model IDs, comma separated (Enter to list them from the server):")).strip()
+            spec = {"base_url": base_url}
+            if key_env:
+                spec["api_key_env"] = key_env
+            if models_text:
+                spec["models"] = [m.strip() for m in models_text.split(",") if m.strip()]
+            from thwip.agents.custom_agent import CustomAgent
+            agent = CustomAgent(name, spec)
+            with console.status("[dim]Asking the server for its model list...[/dim]"):
+                await agent.refresh_models()
+            if not agent.available_models:
+                print_error("The server listed no models and none were given. Check the URL or enter model IDs.")
+                return
+            if agent.discovery_error:
+                print_warning(agent.discovery_error)
+            providers[name] = spec
+            self.registry._agents[name] = agent
+            with contextlib.suppress(Exception):
+                self.config.save()
+            print_success(f"Added {name}: {len(agent.available_models)} model(s), default {agent.get_default_model()}. "
+                          f"Use /switch {name}. Saved under [providers.{name}] in config.toml.")
+            return
+        if sub == "remove":
+            name = rest.strip().lower()
+            if name in providers:
+                providers.pop(name)
+                self.registry._agents.pop(name, None)
+                with contextlib.suppress(Exception):
+                    self.config.save()
+                print_success(f"Removed provider {name}.")
+            else:
+                print_error(f"No custom provider named '{name}'.")
+            return
+        if not providers:
+            console.print(Text("No custom providers yet. /providers add walks you through adding any OpenAI-compatible "
+                               "server, local (llama.cpp, LM Studio, vLLM, Ollama) or hosted.", style="dim"))
+            return
+        table = Table(title="Your providers", box=box.ROUNDED)
+        table.add_column("Name", style="bold white")
+        table.add_column("Base URL", style="white")
+        table.add_column("Models", style="dim")
+        for name, spec in providers.items():
+            agent = self.registry.get_agent(name)
+            models = ", ".join(m.id for m in (agent.available_models if agent else [])) or ", ".join(spec.get("models", []))
+            table.add_row(name, spec.get("base_url", ""), models[:80])
+        console.print(table)
+        console.print(Text("/providers add, /providers remove <name>, /switch <name>", style="dim"))
+
     def cmd_permissions(self) -> None:
         """/permissions: how each native CLI's own permission questions reach you."""
         lines = [
@@ -1292,6 +1371,8 @@ class ThwipCLI:
             ("@path in a message", "Attach a project file's content to your message"),
             ("/prompt [show|set <text>|reset|save]", "Your standing instructions for every assistant; thwip itself adds only a neutral note"),
             ("/permissions", "How each native CLI's own permission questions reach you"),
+            ("/providers [add|remove <name>]", "Your own models: any OpenAI-compatible server, local or hosted"),
+            ("@image.png in a message", "Send an image to the CLI's own image input (Codex, Claude Code)"),
             ("/recall <words>", "Search earlier turns that compaction summarized away"),
             ("/trace [n]", "Recent request traces: latency, tokens, cost, tool calls, errors per provider"),
             ("/memory [show|init|edit|update|sync|vault|link]", "Project memory file shared by every CLI, filed into your second-brain vault; /init is a shortcut for /memory init"),
@@ -2006,6 +2087,14 @@ class ThwipCLI:
                         chat_kwargs["resume"] = self.session.native_session(self.current_agent.name)
                         if memory_note:
                             chat_kwargs["memory_note"] = memory_note
+                    pending_images = getattr(self, "_pending_images", [])
+                    if pending_images:
+                        if getattr(self.current_agent, "supports_images", False):
+                            chat_kwargs["images"] = list(pending_images)
+                        else:
+                            print_warning(f"{self.current_agent.display_name} takes no image input through thwip; "
+                                          "the image was not sent.")
+                        self._pending_images = []
                     response_stream = self.current_agent.chat(**chat_kwargs)
                     # Close the adapter generator deterministically on interruption so child processes stop.
                     closer = contextlib.aclosing(response_stream) if hasattr(response_stream, "aclose") else contextlib.nullcontext(response_stream)

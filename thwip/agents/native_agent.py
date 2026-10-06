@@ -187,7 +187,10 @@ class NativeAgent(BaseAgent):
         self._thread_id = session["thread"]["id"]
         return self._thread_id, False
 
-    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None, memory_note=""):
+    supports_images = True   # Codex takes local image paths as turn input
+
+    async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None, memory_note="",
+                   images=None):
         rpc = await self._live_rpc()
         event_task = None
         chosen = model or self.get_default_model()
@@ -205,8 +208,9 @@ class NativeAgent(BaseAgent):
                 stale = rpc.events.get_nowait()
                 if stale.get("method") == "_closed":
                     raise RuntimeError("Native CLI exited before the turn started.")
-            await rpc.request("turn/start", {"threadId": thread_id, "model": chosen,
-                                             "input": [{"type": "text", "text": prompt}]})
+            turn_input = [{"type": "text", "text": prompt}]
+            turn_input += [{"type": "localImage", "path": str(path)} for path in (images or [])]
+            await rpc.request("turn/start", {"threadId": thread_id, "model": chosen, "input": turn_input})
             usage = TokenUsage()
             started_items = {}
             text_items = set()

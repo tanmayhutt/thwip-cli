@@ -1,6 +1,7 @@
 """Print-mode native adapters, exercised with fake CLI processes only."""
 
 import asyncio
+import base64
 import json
 
 import pytest
@@ -390,3 +391,17 @@ async def test_thwip_adds_no_restrictions_of_its_own(monkeypatch):
     await collect(agy, model="gemini-3.8-flash-high")
     assert "--mode" not in calls[0][0] and "--sandbox" not in calls[0][0]
     await agy.close()
+
+
+@pytest.mark.asyncio
+async def test_claude_turn_carries_images_as_blocks(monkeypatch, tmp_path):
+    agent = PrintAgent("claude", ".")
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"png-bytes")
+    calls = install_fake(monkeypatch, agent, [{"type": "result", "subtype": "success", "result": "a cat", "usage": {}}])
+    events = [e async for e in agent.chat([{"role": "user", "content": "what is this"}], model="fable", images=[str(shot)])]
+    assert isinstance(events[-1], AgentDone)
+    content = calls[0][1].user_messages()[0]
+    assert content[0] == {"type": "text", "text": "what is this"}
+    assert content[1]["type"] == "image" and content[1]["source"]["media_type"] == "image/png"
+    assert content[1]["source"]["data"] == base64.b64encode(b"png-bytes").decode()

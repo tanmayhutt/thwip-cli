@@ -249,6 +249,9 @@ class ThwipConfig:
 
     # Optional per-provider base URL overrides ([endpoints] table)
     endpoints: dict[str, str] = field(default_factory=dict)
+    # Your own providers: any OpenAI-compatible server, local or hosted ([providers.<name>] tables).
+    # Keys: base_url (required), api_key or api_key_env, models (list), default_model, display_name, company.
+    providers: dict[str, dict] = field(default_factory=dict)
 
     # Sub-configs
     fallback: FallbackConfig = field(default_factory=FallbackConfig)
@@ -307,6 +310,12 @@ class ThwipConfig:
         # Endpoint overrides are free-form provider -> URL pairs.
         raw_endpoints = data.get("endpoints", {})
         clean["endpoints"] = {str(k): v for k, v in raw_endpoints.items() if isinstance(v, str)} if isinstance(raw_endpoints, dict) else {}
+        raw_providers = data.get("providers", {})
+        clean["providers"] = {}
+        if isinstance(raw_providers, dict):
+            for name, entry in raw_providers.items():
+                if isinstance(entry, dict) and isinstance(entry.get("base_url"), str) and entry["base_url"].strip():
+                    clean["providers"][str(name)] = entry
         raw_keys = data.get("keys", {})
         clean["keys"] = {key: value for key, value in raw_keys.items()
                          if isinstance(value, str) and value.strip()} if isinstance(raw_keys, dict) else {}
@@ -375,6 +384,21 @@ class ThwipConfig:
             from thwip import endpoints as endpoint_overrides
             endpoint_overrides.configure(self.endpoints)
 
+        # Custom providers
+        providers = data.get("providers", {})
+        if isinstance(providers, dict):
+            self.providers = {}
+            for name, entry in providers.items():
+                slug = str(name).strip().lower().replace(" ", "-")
+                if not slug or not isinstance(entry, dict):
+                    continue
+                clean_entry = {"base_url": str(entry["base_url"]).strip().rstrip("/")}
+                for key in ("api_key", "api_key_env", "default_model", "display_name", "company"):
+                    if isinstance(entry.get(key), str) and entry[key].strip():
+                        clean_entry[key] = entry[key].strip()
+                if isinstance(entry.get("models"), list):
+                    clean_entry["models"] = [str(m).strip() for m in entry["models"] if isinstance(m, str) and m.strip()]
+                self.providers[slug] = clean_entry
         # Fallback
         fallback = data.get("fallback", {})
         if "enabled" in fallback:
@@ -447,6 +471,7 @@ class ThwipConfig:
                 "max_width": self.display.max_width,
                 "dynamic_ui": self.display.dynamic_ui,
             },
+            "providers": self.providers,
             "limits": {
                 "warn_at_percent": self.limits.warn_at_percent,
                 "quota_warn_percent": self.limits.quota_warn_percent,
