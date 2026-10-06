@@ -267,3 +267,44 @@ async def test_cli_wording_aliases_map_to_thwip_commands(cli, monkeypatch):
     for line in ("/sessions", "/approvals", "/clis", "/continue 2", "/init"):
         await cli.handle_command(line)
     assert seen == ["sessions", "permissions", "agents", "resume:2", "memory:init"]
+
+
+@pytest.mark.asyncio
+async def test_switch_offers_compaction_when_the_transfer_is_large(cli, monkeypatch):
+    from thwip.config import LimitsConfig
+
+    cli.config.limits = LimitsConfig(compact_at_percent=1, assumed_context_tokens=1000)
+    for i in range(6):
+        cli.session.add_user_message(f"question {i} " + "word " * 200)
+        cli.session.add_assistant_message(f"answer {i} " + "word " * 200, agent_name="openai", model="alpha", company="x")
+    asked = []
+    async def yes_no(question):
+        asked.append(question)
+        return False
+    monkeypatch.setattr(cli, "_ask_yes_no", yes_no)
+    monkeypatch.setattr("thwip.cli.sys.stdin.isatty", lambda: True)
+    await cli._offer_compaction_before_switch(FakeAgent(), "alpha")
+    assert asked and "Compact older turns first" in asked[0]
+    # A short conversation is switched without any question.
+    asked.clear()
+    cli.session.clear_context()
+    cli.session.add_user_message("hi")
+    cli.session.add_assistant_message("hello", agent_name="openai", model="alpha", company="x")
+    await cli._offer_compaction_before_switch(FakeAgent(), "alpha")
+    assert not asked
+
+
+def test_current_folder_wins_over_the_remembered_project(tmp_path, monkeypatch):
+    from thwip.cli import ThwipCLI
+
+    monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path / "config"))
+    remembered = tmp_path / "remembered"
+    here = tmp_path / "here"
+    remembered.mkdir(); here.mkdir()
+    cfg = ThwipConfig(project=str(remembered))
+    cfg.save()
+    monkeypatch.chdir(here)
+    assert Path(ThwipCLI().config.project) == here.resolve()
+    monkeypatch.chdir(Path.home())
+    assert Path(ThwipCLI().config.project) == remembered.resolve(), "from home, the remembered project is the default"
+    assert Path(ThwipCLI(project=str(here)).config.project) == here.resolve(), "--project always wins"

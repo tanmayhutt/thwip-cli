@@ -127,6 +127,14 @@ needs one is declined by the CLI itself and thwip shows its explanation; its own
 flag is the only alternative. `/permissions` prints this summary. The evaluation harness approves the
 CLIs' write questions for the file-edit task so all three are measured on a real edit.
 
+**Before a switch.** A switch sends the live conversation to the new CLI. When that transfer would
+fill a large share of the new CLI's window, thwip says how many tokens it is and offers to compact
+first, so the handoff is small. `/handoff` shows the same numbers without switching.
+
+**Which project opens.** `--project PATH` always wins. Otherwise the folder you start thwip in is the
+project. Started from your home folder, the last project is the default and the picker offers the
+rest, including New project.
+
 Antigravity stays open between turns: starting it costs about 12 seconds of account checks before
 the model is asked, so thwip keeps one process per conversation and sends each new message to it.
 Measured: 41 s for the first turn, 22 s for the next ones. Claude Code and Codex start fast, so

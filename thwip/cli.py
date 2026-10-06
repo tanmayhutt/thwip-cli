@@ -158,10 +158,16 @@ class ThwipCLI:
     def __init__(self, project: str | None = None) -> None:
         self.config = ThwipConfig.load()
         self._explicit_project = bool(project)
+        home = str(Path.home().resolve())
         if project:
             self.config.project = project
+        elif os.path.abspath(os.getcwd()) != home:
+            self.config.project = os.getcwd()   # the folder you are standing in is the project
+        elif not self.config.project or self.config.project == ".":
+            self.config.project = home          # from home with nothing remembered: the picker will ask
+        # Otherwise, started from home: the last project is the default and the picker offers the rest.
         # Sessions and memory files are keyed by project; never let that depend on the current directory later.
-        self.config.project = os.path.abspath(os.path.expanduser(self.config.project or "."))
+        self.config.project = os.path.abspath(os.path.expanduser(self.config.project))
         self.registry = AgentRegistry(self.config)
         self.detector = SystemDetector()
         self.usage_tracker = UsageTracker()
@@ -685,6 +691,31 @@ class ThwipCLI:
                       f"({estimate:,} of {window:,} tokens, estimated).")
         if await self._ask_yes_no(f"Compact older turns now using {who}? Recent turns stay verbatim. [y/N]"):
             await self.cmd_compact(reason="the conversation was near the context limit")
+
+    async def _offer_compaction_before_switch(self, target, model: str) -> None:
+        """A switch sends the whole live conversation to the new CLI. When that transfer would already fill a large
+        share of the target's window, offer to compact first so the handoff is small."""
+        config = getattr(self, "config", None)
+        if config is None:
+            return
+        limits = getattr(config, "limits", None)
+        threshold = getattr(limits, "compact_at_percent", 65)
+        portable = self.session.to_portable_messages()
+        try:
+            report = build_handoff_report(self.session, self.current_agent, target, model, None)
+            window, estimate = report.context_window, report.estimated_input_tokens
+        except Exception:
+            # A rough count is enough for an offer: about four characters per token.
+            window, estimate = 0, sum(len(str(m.get("content", ""))) for m in portable) // 4
+        window = window or getattr(limits, "assumed_context_tokens", 200_000)
+        keep = getattr(limits, "keep_recent_messages", 4)
+        older, _recent = compaction.split_for_compaction(portable, keep)
+        if not window or estimate * 100 < window * threshold or len(older) < 2 or not sys.stdin.isatty():
+            return
+        print_warning(f"This switch would send about {estimate:,} tokens to {target.display_name} "
+                      f"({estimate * 100 // window}% of its {window:,}-token window).")
+        if await self._ask_yes_no("Compact older turns first so the handoff is small? Recent turns stay verbatim. [y/N]"):
+            await self.cmd_compact(reason="the conversation was large before a switch")
 
     def _quota_warning(self) -> None:
         """After a turn: when the CLI reports its usage window nearly full, recommend switching before it runs out."""
@@ -1394,6 +1425,8 @@ class ThwipCLI:
                           "The CLI validates it on your next message; use /models to see the reported list.")
 
         old_agent = self.current_agent
+        if new_agent is not old_agent:
+            await self._offer_compaction_before_switch(new_agent, chosen_model)
         old_caps = old_agent.get_capabilities_for_model(self.session.current_model)
         carried = len(self.session.to_portable_messages())
 
