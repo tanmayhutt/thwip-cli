@@ -157,6 +157,7 @@ class ThwipCLI:
 
     def __init__(self, project: str | None = None) -> None:
         self.config = ThwipConfig.load()
+        self._explicit_project = bool(project)
         if project:
             self.config.project = project
         # Sessions and memory files are keyed by project; never let that depend on the current directory later.
@@ -251,6 +252,9 @@ class ThwipCLI:
             "  [dim]Type [bold white]/help[/bold white] for commands, [bold white]/switch[/bold white] to change agent, or just start chatting.[/dim]\n"
         )
         await self._memory_onboarding()
+        # Launched from the home folder without --project: ask which project to work on (Enter keeps the last one).
+        if Path.cwd().resolve() == Path.home().resolve() and not self._explicit_project and sys.stdin.isatty():
+            await self._choose_project(at_startup=True)
 
         # Setup prompt session
         history_path = get_config_dir() / "history.txt"
@@ -447,8 +451,8 @@ class ThwipCLI:
         elif cmd == "/export":
             self.cmd_export(cmd_line.partition(" ")[2].strip())
 
-        elif cmd == "/writes":
-            self.cmd_writes(arg1.lower())
+        elif cmd == "/permissions":
+            self.cmd_permissions()
 
         elif cmd == "/recall":
             self.cmd_recall(cmd_line.partition(" ")[2].strip())
@@ -481,7 +485,10 @@ class ThwipCLI:
             path_arg = cmd_line.partition(" ")[2].strip()
             if len(path_arg) >= 2 and path_arg[0] == path_arg[-1] and path_arg[0] in "\"'":
                 path_arg = path_arg[1:-1]
-            self.cmd_project(path_arg)
+            if path_arg:
+                self.cmd_project(path_arg)
+            else:
+                await self._choose_project()
 
         elif cmd == "/session":
             sub = arg1.lower()
@@ -524,7 +531,7 @@ class ThwipCLI:
         self.current_agent = agent
         self.tool_manager = ToolManager(str(project))
         self.tool_manager.history_search = self._search_history
-        print_success(f"Loaded session '{loaded.name}' with {len(loaded.messages)} messages.")
+        print_success(f"Loaded session '{loaded.name}' with {len(loaded.messages)} messages in {pretty_path(str(project))}.")
         return True
 
     async def cmd_model(self, model_id: str = "") -> None:
@@ -574,8 +581,8 @@ class ThwipCLI:
             return
         console.print("\n[bold white]Saved sessions:[/bold white]")
         for index, item in enumerate(sessions, 1):
-            console.print(f"  [bold white]{index}.[/bold white] {item['name']} [dim]{item['agent']}/{item['model']} | "
-                          f"{item['messages_count']} messages | {item['updated_at']}[/dim]")
+            console.print(f"  [bold white]{index}.[/bold white] {item['name']} [dim]{pretty_path(item.get('project') or '')} | "
+                          f"{item['agent']}/{item['model']} | {item['messages_count']} messages | {item['updated_at']}[/dim]")
         answer = await self._ask_text(f"Resume [1-{len(sessions)}] (Enter to cancel):")
         if answer.isdigit() and 1 <= int(answer) <= len(sessions):
             self._load_session(sessions[int(answer) - 1]["name"])
@@ -1105,27 +1112,16 @@ class ThwipCLI:
             return "No earlier conversation matched that query." if self.session.archive else "Nothing has been compacted yet; the full conversation is already in context."
         return "\n\n".join(chunk.text for chunk in found)
 
-    def cmd_writes(self, mode: str = "") -> None:
-        """/writes [allow|deny]: whether native CLIs may edit files inside the project without a prompt."""
-        from thwip.config import NativeConfig
-        cfg = getattr(self.config, "native", None) or NativeConfig()
-        if mode in {"allow", "deny"}:
-            cfg.writes = mode
-            self.config.native = cfg
-            with contextlib.suppress(Exception):
-                self.config.save()
-            for agent in self.registry.list_agents():
-                if getattr(agent, "native_tools", False):
-                    agent.writes = mode
-            if mode == "allow":
-                print_success("Native writes allowed: Claude Code and Antigravity may edit files inside the project without asking; "
-                              "Codex uses a workspace-write sandbox. Files outside the project are still refused. Saved to config.")
-            else:
-                print_success("Native writes denied: Claude Code and Antigravity run read-only; Codex asks before any write. Saved to config.")
-            return
-        current = cfg.writes
-        console.print(Text(f"Native writes: {current}. " + ("Edits inside the project happen without prompts." if current == "allow"
-                           else "Native sessions are read-only; Codex asks before writing.") + " Use /writes allow or /writes deny.", style="dim"))
+    def cmd_permissions(self) -> None:
+        """/permissions: how each native CLI's own permission questions reach you."""
+        lines = [
+            "thwip adds no restrictions of its own. Each CLI runs with the powers it has on its own:",
+            "  Codex        workspace sandbox; anything beyond it is asked here (y/N).",
+            "  Claude Code  its own tools and your settings; anything that would prompt is asked here (y/N).",
+            "  Antigravity  cannot relay questions in headless mode; a tool that needs one is declined by the CLI",
+            "               itself and thwip shows why. Its own skip-permissions flag is the only alternative.",
+        ]
+        console.print(Text("\n".join(lines), style="dim"))
 
     def cmd_recall(self, query: str) -> None:
         if not query:
@@ -1258,7 +1254,7 @@ class ThwipCLI:
             ("!<command>", "Run a shell command in the project without a model"),
             ("@path in a message", "Attach a project file's content to your message"),
             ("/prompt [show|set <text>|reset|save]", "Your standing instructions for every assistant; thwip itself adds only a neutral note"),
-            ("/writes [allow|deny]", "Let native CLIs edit files inside the project without prompts (default deny)"),
+            ("/permissions", "How each native CLI's own permission questions reach you"),
             ("/recall <words>", "Search earlier turns that compaction summarized away"),
             ("/trace [n]", "Recent request traces: latency, tokens, cost, tool calls, errors per provider"),
             ("/memory [show|init|edit|update|sync|vault|link]", "Project memory file shared by every agent, filed into your second-brain vault"),
@@ -1268,7 +1264,7 @@ class ThwipCLI:
             ("/clear", "Clear current conversation memory"),
             ("/history", "View conversation history with model attribution badges"),
             ("/cost", "Show estimated session and cumulative cost"),
-            ("/project [path]", "View or change project working directory"),
+            ("/project [path]", "Pick a known project, create one, or switch to a path; sessions remember their project"),
             ("Ctrl + S", "Interactive agent/model switcher prompt"),
             ("Ctrl + T", "Status view and token counters"),
             ("Ctrl + C", "Interrupt the current response, command, or prompt"),
@@ -1655,7 +1651,7 @@ class ThwipCLI:
         content.append(f"Tokens:      {self.session.get_total_tokens():,} used\n", style="dim")
         if getattr(self.current_agent, "native_tools", False):
             content.append("Connection:  Existing CLI sign-in; billing and tool accounting managed by native CLI\n", style="dim")
-            content.append(f"Writes:      {getattr(getattr(self.config, 'native', None), 'writes', 'deny')} (/writes allow|deny)\n", style="dim")
+            content.append("Permissions: the CLI's own; questions are relayed here (/permissions)\n", style="dim")
             content.append(f"Usage:       {describe_limit_windows(getattr(self.current_agent, 'limit_windows', []))}\n", style="dim")
             record = self.session.native_session(self.current_agent.name)
             if record:
@@ -1760,6 +1756,84 @@ class ThwipCLI:
         else:
             console.print(f"  Current project path: [bold white]{os.path.abspath(self.session.project_path)}[/bold white]")
 
+    def _known_projects(self) -> list[Path]:
+        """Projects thwip already knows: recent sessions first, then every project folder under the scan roots."""
+        seen: list[Path] = []
+        home = Path.home().resolve()
+
+        def add(candidate: str | Path) -> None:
+            path = Path(candidate).expanduser()
+            if not path.is_dir():
+                return
+            path = path.resolve()
+            if path != home and path not in seen:
+                seen.append(path)
+
+        for item in Session.list_saved_sessions():
+            add(item.get("project") or "")
+        cfg = self._memory_config()
+        for memory in Vault.discover_projects(list(cfg.scan), cfg.file):
+            add(memory.project_path)
+        for root in cfg.scan:
+            base = Path(root).expanduser()
+            if base.is_dir():
+                for child in sorted(base.iterdir()):
+                    if child.is_dir() and not child.name.startswith("."):
+                        add(child)
+        return seen
+
+    async def _choose_project(self, at_startup: bool = False) -> None:
+        """Pick the project this session works on. Sessions are stored by session, so thwip can run from anywhere,
+        including the home folder, and the chosen project is remembered inside the session."""
+        known = self._known_projects()
+        if at_startup:
+            console.print(Text("thwip is running from your home folder. Pick the project to work on, or create one; "
+                               "the agents will work inside that folder and its context file.", style="dim"))
+        for index, path in enumerate(known, 1):
+            marker = " (context.md)" if (path / self._memory_config().file).is_file() else ""
+            console.print(f"  [bold white]{index}.[/bold white] {pretty_path(str(path))}[dim]{marker}[/dim]")
+        new_index = len(known) + 1
+        console.print(f"  [bold white]{new_index}.[/bold white] New project")
+        console.print(f"  [bold white]{new_index + 1}.[/bold white] Enter a path")
+        answer = await self._ask_text(f"Project [1-{new_index + 1}] (Enter to stay in {pretty_path(self.session.project_path)}):")
+        if not answer:
+            return
+        if answer.isdigit() and 1 <= int(answer) <= len(known):
+            self.cmd_project(str(known[int(answer) - 1]))
+        elif answer == str(new_index):
+            await self._create_project()
+        elif answer == str(new_index + 1) or not answer.isdigit():
+            path = answer if not answer.isdigit() else await self._ask_text("Project folder path:")
+            if path:
+                self.cmd_project(path)
+        else:
+            print_info("No project chosen.")
+
+    async def _create_project(self) -> None:
+        """Create a project folder with a context file and switch to it."""
+        cfg = self._memory_config()
+        default_parent = next((Path(root).expanduser() for root in cfg.scan if Path(root).expanduser().is_dir()),
+                              Path.home() / "Projects")
+        name = await self._ask_text("Project name:")
+        if not name:
+            print_info("No project created.")
+            return
+        parent = await self._ask_text(f"Parent folder (Enter for {pretty_path(str(default_parent))}):") or str(default_parent)
+        target = Path(parent).expanduser().resolve() / name.strip()
+        if target.exists() and any(target.iterdir()):
+            print_info(f"{pretty_path(str(target))} already exists and is not empty; switching to it.")
+        else:
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                print_error(f"Could not create {target}: {exc}")
+                return
+        self.cmd_project(str(target))
+        memory = ProjectMemory(str(target), cfg.file)
+        if not memory.exists():
+            memory.init()
+            print_success(f"Created {cfg.file}; agents will read and maintain it. /memory update fills it from the conversation.")
+
     def cmd_list_sessions(self) -> None:
         sessions = Session.list_saved_sessions()
         if not sessions:
@@ -1767,12 +1841,13 @@ class ThwipCLI:
             return
         table = Table(title="Saved Sessions", box=box.ROUNDED)
         table.add_column("Name", style="bold white")
+        table.add_column("Project", style="white")
         table.add_column("Agent", style="cyan")
         table.add_column("Model", style="white")
         table.add_column("Messages", style="green")
         table.add_column("Updated", style="dim")
         for s in sessions:
-            table.add_row(s["name"], s["agent"], s["model"], str(s["messages_count"]), s["updated_at"])
+            table.add_row(s["name"], pretty_path(s.get("project") or ""), s["agent"], s["model"], str(s["messages_count"]), s["updated_at"])
         console.print(table)
 
     async def process_user_message(self, text: str, _attempted: set[str] | None = None) -> None:
@@ -1781,7 +1856,6 @@ class ThwipCLI:
         if native:
             self.session.tool_tracking_complete = False
             self.current_agent.project = str(Path(self.session.project_path).resolve())
-            self.current_agent.writes = getattr(getattr(self.config, "native", None), "writes", "deny")
             if not self.current_agent.is_configured():
                 await self.current_agent.refresh_models()
                 if not self.current_agent.is_configured():

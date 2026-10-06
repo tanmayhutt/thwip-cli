@@ -1,14 +1,22 @@
 """Native Claude Code and Antigravity integrations through their stream-json print modes.
 
-Both CLIs run one non-interactive turn per process using the sign-in already
-stored by the CLI. Thwip never reads or copies those credentials. Tools that
-would need an interactive approval are declined by the CLIs themselves in print
-mode, so these connections behave as read-only assistants over the project.
+Both CLIs run non-interactively using the sign-in already stored by the CLI. thwip never
+reads or copies those credentials, and it adds no restrictions of its own: each CLI keeps
+the tools and settings it has on its own.
+
+Claude Code: one process per turn (sessions resume by ID). Its permission questions are
+routed over the stream (`--permission-prompt-tool stdio`) and relayed to the thwip prompt.
+
+Antigravity: one process per conversation, kept open between turns (`--input-format
+stream-json`), because every start costs about 12 seconds of account checks before the
+model is even asked. Antigravity cannot relay permission questions in headless mode: a
+tool that needs one is declined by the CLI itself, and thwip shows its explanation.
 """
 
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import json
 import os
@@ -24,6 +32,7 @@ from thwip.agents.base import (
     LimitStatus,
     ModelInfo,
     NativeActivity,
+    NativePermission,
     SubscriptionInfo,
     TextDelta,
     ThinkingDelta,
@@ -58,8 +67,64 @@ def _tier_for(model_id: str) -> str:
     return "balanced"
 
 
+def describe_claude_request(request: dict) -> str:
+    """Summarize a Claude Code permission question for the terminal without raw payloads."""
+    tool = str(request.get("display_name") or request.get("tool_name") or "a tool")
+    args = request.get("input") if isinstance(request.get("input"), dict) else {}
+    lines = [f"Claude Code wants to use {tool}."]
+    if tool == "Bash" and args.get("command"):
+        lines.append(f"Command:   {scrub(str(args['command']), 400)}")
+    elif args.get("file_path"):
+        lines.append(f"File:      {scrub(str(args['file_path']), 200)}")
+    elif args:
+        lines.append(f"Input:     {scrub(json.dumps(args), 300)}")
+    if request.get("description"):
+        lines.append(f"Reason:    {scrub(str(request['description']), 300)}")
+    lines.append("This is Claude Code's own question; thwip only relays it. Denying lets it continue without the operation.")
+    return "\n".join(lines)
+
+
+class _KeptOpen:
+    """An Antigravity process kept alive between turns, with its stderr drained into a bounded buffer."""
+
+    def __init__(self, process, conversation_id: str | None, project: str):
+        self.process = process
+        self.conversation_id = conversation_id
+        self.project = project
+        self.stderr_lines: collections.deque[str] = collections.deque(maxlen=50)
+        self._drain = asyncio.ensure_future(self._drain_stderr())
+
+    async def _drain_stderr(self):
+        if not self.process.stderr:
+            return
+        with contextlib.suppress(Exception):
+            while True:
+                line = await self.process.stderr.readline()
+                if not line:
+                    return
+                self.stderr_lines.append(line.decode("utf-8", "replace").rstrip())
+
+    def alive(self) -> bool:
+        return self.process.returncode is None
+
+    def recent_stderr(self) -> str:
+        text = "\n".join(self.stderr_lines)
+        self.stderr_lines.clear()
+        return text
+
+    async def close(self):
+        self._drain.cancel()
+        with contextlib.suppress(Exception):
+            if self.process.stdin:
+                self.process.stdin.close()
+        if self.process.returncode is None:
+            terminate_process_tree(self.process)
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self.process.wait(), 5)
+
+
 class PrintAgent(BaseAgent):
-    """Runs an installed CLI in single-turn print mode with streamed JSON events."""
+    """Runs an installed CLI in print mode with streamed JSON events."""
 
     native_tools = True
     capabilities = {Capability.CHAT, Capability.FILE_READ, Capability.FILE_EDIT,
@@ -76,7 +141,7 @@ class PrintAgent(BaseAgent):
         self.ready = False
         self.discovery_error = "Not connected yet"
         self.limit_windows: list[dict] = []
-        self.writes = "deny"   # "allow" lets the CLI edit files inside the project without prompts
+        self._kept: _KeptOpen | None = None   # Antigravity only
 
     # --- Detection ---
 
@@ -115,21 +180,16 @@ class PrintAgent(BaseAgent):
 
     # --- Process plumbing ---
 
-    async def _start_process(self, command: list[str], stdin_text: str | None = None):
+    async def _start_process(self, command: list[str], stdin_open: bool = False):
         executable = shutil.which(self.binary)
         if not executable:
             raise RuntimeError(f"{self.display_name} is no longer installed.")
-        process = await asyncio.create_subprocess_exec(
+        return await asyncio.create_subprocess_exec(
             executable, *command, cwd=self.project,
-            stdin=asyncio.subprocess.PIPE if stdin_text is not None else asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.PIPE if stdin_open else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             limit=4 * 1024 * 1024, start_new_session=os.name == "posix",
         )
-        if stdin_text is not None:
-            process.stdin.write(stdin_text.encode())
-            await process.stdin.drain()
-            process.stdin.close()
-        return process
 
     async def _run_captured(self, command: list[str], timeout: float) -> tuple[int, str, str]:
         process = await self._start_process(command)
@@ -140,6 +200,17 @@ class PrintAgent(BaseAgent):
             await process.wait()
             raise
         return process.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+
+    @staticmethod
+    async def _send(process, payload: dict) -> None:
+        process.stdin.write((json.dumps(payload) + "\n").encode())
+        await process.stdin.drain()
+
+    async def close(self):
+        """Stop the kept-open Antigravity process (on exit or project change). Conversations stay resumable."""
+        kept, self._kept = self._kept, None
+        if kept is not None:
+            await kept.close()
 
     # --- Discovery ---
 
@@ -181,29 +252,25 @@ class PrintAgent(BaseAgent):
             models[0].is_default = True
         return models
 
-    # --- Chat ---
+    # --- Commands ---
 
-    def _turn_command(self, prompt: str, model: str, system_prompt: str | None,
-                      resume_id: str | None, new_id: str | None) -> tuple[list[str], str | None]:
+    def _turn_command(self, model: str, system_prompt: str | None, resume_id: str | None, new_id: str | None) -> list[str]:
+        """The CLI invocation for one turn. The prompt itself travels over stdin as a stream-json message."""
         if self.name == "claude":
-            # Path patterns confine Claude Code's own read tools to the project folder; anything outside is
-            # a permission denial in print mode. Verified live 2026-10-04 (../secret.txt refused, note.txt read).
-            allowed = "Read(./**),Glob(./**),Grep(./**),WebFetch,WebSearch"
-            if self.writes == "allow":
-                allowed += ",Edit(./**),Write(./**)"   # project-scoped; ../ paths are still permission denials
-            command = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                       "--model", model, "--allowedTools", allowed]
+            # No allow-list and no tool restriction: Claude Code keeps its own tools and the user's own settings.
+            # Anything it would normally ask about arrives as a control_request and is relayed to the thwip prompt.
+            command = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                       "--include-partial-messages", "--model", model, "--permission-prompt-tool", "stdio"]
             command += ["--resume", resume_id] if resume_id else ["--session-id", new_id]
             if system_prompt and not resume_id:
                 command += ["--append-system-prompt", system_prompt]
-            return command, prompt
-        command = ["--print", prompt, "--output-format", "stream-json", "--model", model,
-                   "--print-timeout", f"{TURN_TIMEOUT}s"]
-        if self.writes == "allow":
-            command += ["--mode", "accept-edits"]   # Antigravity applies file edits without a prompt
+            return command
+        command = ["--input-format", "stream-json", "--output-format", "stream-json", "--model", model, "--print="]
         if resume_id:
             command += ["--conversation", resume_id]
-        return command, None
+        return command
+
+    # --- Chat ---
 
     async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None, memory_note=""):
         chosen = model or self.get_default_model()
@@ -228,25 +295,40 @@ class PrintAgent(BaseAgent):
             yield event
 
     async def _turn(self, prompt, model, system_prompt, resume_id, new_id):
-        command, stdin_text = self._turn_command(prompt, model, system_prompt, resume_id, new_id)
-        process = await self._start_process(command, stdin_text)
+        if self.name == "claude":
+            async for event in self._claude_turn(prompt, model, system_prompt, resume_id, new_id):
+                yield event
+        else:
+            async for event in self._antigravity_turn(prompt, model, resume_id):
+                yield event
+
+    # Claude Code: one process per turn, questions relayed.
+
+    async def _claude_turn(self, prompt, model, system_prompt, resume_id, new_id):
+        process = await self._start_process(self._turn_command(model, system_prompt, resume_id, new_id), stdin_open=True)
         usage = TokenUsage()
-        streamed_text = False
-        produced_text = False
-        finished = False
-        session_id = resume_id or (new_id if self.name == "claude" else None)
+        streamed_text = produced_text = finished = False
+        session_id = resume_id or new_id
         try:
+            # The initialize handshake is what makes Claude Code route can_use_tool questions over the stream.
+            await self._send(process, {"type": "control_request", "request_id": "thwip-init",
+                                       "request": {"subtype": "initialize"}})
+            await self._send(process, {"type": "user", "message": {"role": "user", "content": prompt}})
             async for event in self._iterate(process):
-                kind = event.get("type") or event.get("event")
+                kind = event.get("type")
                 if kind == "system" and event.get("session_id"):
                     session_id = event["session_id"]
-                elif kind == "init" and isinstance(event.get("init"), dict) or kind == "init":
-                    session_id = event.get("conversation_id") or session_id
-                if self.name == "claude":
-                    result = self._claude_event(event, kind)
-                else:
-                    result = self._antigravity_event(event, kind)
-                for item in result:
+                if kind == "control_request":
+                    request = event.get("request") if isinstance(event.get("request"), dict) else {}
+                    if request.get("subtype") == "can_use_tool":
+                        permission = NativePermission(describe_claude_request(request))
+                        yield permission
+                        answer = ({"behavior": "allow", "updatedInput": request.get("input") or {}} if permission.approved
+                                  else {"behavior": "deny", "message": "The user declined this operation in thwip."})
+                        await self._send(process, {"type": "control_response", "response": {
+                            "subtype": "success", "request_id": event.get("request_id"), "response": answer}})
+                    continue
+                for item in self._claude_event(event, kind):
                     if isinstance(item, TokenUsage):
                         usage = item
                     elif isinstance(item, str):
@@ -256,11 +338,7 @@ class PrintAgent(BaseAgent):
                     elif isinstance(item, AgentDone):
                         finished = True
                         if not streamed_text and not produced_text:
-                            # Antigravity's print mode auto-denies tools it cannot prompt for and then returns an empty
-                            # answer, explaining itself only on stderr. Surface that instead of a silent blank.
-                            note = await self._empty_answer_note(process)
-                            if note:
-                                yield TextDelta(content=note)
+                            yield TextDelta(content=f"[{self.display_name} returned an empty answer.]")
                         yield AgentDone(usage=usage, native_session={"id": session_id} if session_id else {})
                         return
                     else:
@@ -282,23 +360,80 @@ class PrintAgent(BaseAgent):
                 raise RuntimeError(f"{self.display_name} exited before completing the response "
                                    f"(exit code {process.returncode}).{detail}{network_hint(stderr)}")
         finally:
+            with contextlib.suppress(Exception):
+                if process.stdin:
+                    process.stdin.close()
             if process.returncode is None:
                 terminate_process_tree(process)
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(process.wait(), 5)
 
-    async def _empty_answer_note(self, process) -> str:
-        """Read what the CLI said on stderr when it returned nothing, scrubbed and bounded."""
-        if not process.stderr:
-            return f"[{self.display_name} returned an empty answer.]"
+    # Antigravity: one process per conversation, kept open between turns.
+
+    async def _ensure_antigravity(self, model: str, resume_id: str | None) -> _KeptOpen:
+        kept = self._kept
+        if kept is not None and kept.alive() and kept.project == self.project and resume_id and kept.conversation_id == resume_id:
+            return kept
+        await self.close()
+        process = await self._start_process(self._turn_command(model, None, resume_id, None), stdin_open=True)
+        self._kept = _KeptOpen(process, resume_id, self.project)
+        return self._kept
+
+    async def _antigravity_turn(self, prompt, model, resume_id):
+        kept = await self._ensure_antigravity(model, resume_id)
+        process = kept.process
+        usage = TokenUsage()
+        streamed_text = produced_text = False
+        session_id = kept.conversation_id
         try:
-            raw = await asyncio.wait_for(process.stderr.read(4096), 2)
-        except Exception:
-            raw = b""
-        detail = scrub(raw.decode("utf-8", "replace"), 300)
+            await self._send(process, {"event": "user", "message": {"role": "user", "content": prompt}})
+            async for event in self._iterate(process):
+                kind = event.get("event") or event.get("type")
+                if kind == "init":
+                    session_id = event.get("conversation_id") or session_id
+                    kept.conversation_id = session_id
+                for item in self._antigravity_event(event, kind):
+                    if isinstance(item, TokenUsage):
+                        usage = item
+                    elif isinstance(item, str):
+                        if item and not streamed_text:
+                            produced_text = True
+                            yield TextDelta(content=item)
+                    elif isinstance(item, AgentDone):
+                        if not streamed_text and not produced_text:
+                            # Antigravity declines tools it cannot ask about in headless mode and then returns an
+                            # empty answer, explaining itself only on stderr. Surface that instead of a silent blank.
+                            await asyncio.sleep(0.2)
+                            yield TextDelta(content=self._empty_answer_note(kept.recent_stderr()))
+                        yield AgentDone(usage=usage, native_session={"id": session_id} if session_id else {})
+                        return
+                    else:
+                        if isinstance(item, TextDelta):
+                            streamed_text = True
+                        yield item
+                        if isinstance(item, LimitHit):
+                            return
+            # stdout closed: the process died mid-turn.
+            await asyncio.wait_for(process.wait(), 5)
+            stderr = scrub(kept.recent_stderr(), 200)
+            await self.close()
+            limit = classify_limit(stderr)
+            if limit:
+                yield LimitHit(error_type=limit, message=stderr)
+                return
+            detail = f" {stderr}" if stderr else ""
+            raise RuntimeError(f"{self.display_name} exited before completing the response "
+                               f"(exit code {process.returncode}).{detail}{network_hint(stderr)}")
+        except (TimeoutError, asyncio.CancelledError, GeneratorExit):
+            await self.close()   # an interrupted turn leaves the conversation in an unknown state; start clean next time
+            raise
+
+    def _empty_answer_note(self, stderr: str) -> str:
+        detail = scrub(stderr, 300)
         if "auto-denied" in detail or "permission" in detail.lower():
-            return (f"[{self.display_name} produced no answer: it needed a tool permission that its print mode cannot ask for, "
-                    "so the operation was denied. thwip runs native sessions read-only.]")
+            return (f"[{self.display_name} produced no answer: it needed a tool permission that its headless mode cannot "
+                    "ask for, so the CLI declined the tool itself. Its own skip-permissions flag is the only way around this; "
+                    "see /permissions.]")
         return f"[{self.display_name} returned an empty answer{': ' + detail if detail else ''}]"
 
     async def _iterate(self, process):
@@ -372,8 +507,11 @@ class PrintAgent(BaseAgent):
                 return [TextDelta(content=step.get("text_delta", ""))] if step.get("text_delta") else []
             if step_type in {"user_input", "thinking"}:
                 return [ThinkingDelta(content=step["text_delta"])] if step_type == "thinking" and step.get("text_delta") else []
+            label = step.get("tool_name") or step_type
             if step.get("state") == "ACTIVE":
-                return [NativeActivity(description=f"Tool: {step_type}")]
+                return [NativeActivity(description=f"Tool: {label}")]
+            if step.get("state") == "ERROR":
+                return [NativeActivity(description=f"Tool {label} did not run")]
             return []
         if kind == "result":
             result = event.get("result", {})

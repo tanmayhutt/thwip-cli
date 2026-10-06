@@ -94,7 +94,7 @@ sign-in rather than ask for an API key.
 
 | File | Lines | What it does |
 |---|---|---|
-| `agents/native_print.py` | 357 | Runs the Claude Code and Antigravity CLIs one turn at a time and reads their streamed output |
+| `agents/native_print.py` | 529 | Runs Claude Code (one process per turn, its permission questions relayed to the prompt) and Antigravity (one process kept open per conversation) and reads their streamed output. thwip adds no restriction of its own |
 | `agents/native_agent.py` | 288 | Talks to the Codex App Server over JSON-RPC |
 | `agents/native_common.py` | 129 | Shared helpers: scrubbing output, classifying rate limits, building prompts |
 | `agents/native_rpc.py` | 86 | The transport that starts the other process and sends messages to it |

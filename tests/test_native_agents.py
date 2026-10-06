@@ -140,7 +140,7 @@ async def test_codex_thread_uses_protocol_sandbox_spelling(monkeypatch):
     async for _ in agent.chat([{'role': 'user', 'content': 'hello'}], model='future-model', system_prompt='Be terse.'):
         pass
     _method, params = next(request for request in rpc.requests if request[0] == 'thread/start')
-    assert params['sandbox'] == 'read-only' and params['approvalPolicy'] == 'on-request'
+    assert params['sandbox'] == 'workspace-write' and params['approvalPolicy'] == 'on-request', 'Codex keeps its own sandbox; questions are relayed'
     assert params['developerInstructions'] == 'Be terse.'
     turn = next(params for method, params in rpc.requests if method == 'turn/start')
     assert turn['input'][0]['text'] == 'hello'
@@ -273,7 +273,7 @@ async def test_codex_falls_back_to_new_thread_when_resume_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_codex_sandbox_follows_write_mode_and_restarts_thread(monkeypatch):
+async def test_codex_thread_is_reused_across_turns(monkeypatch):
     agent = NativeAgent('openai', '.')
     rpc = FakeRPC('openai')
     async def connect():
@@ -281,11 +281,9 @@ async def test_codex_sandbox_follows_write_mode_and_restarts_thread(monkeypatch)
     monkeypatch.setattr(agent, '_connect', connect)
     [e async for e in agent.chat([{'role': 'user', 'content': 'a'}], model='future-model')]
     start = next(p for m, p in rpc.requests if m == 'thread/start')
-    assert start['sandbox'] == 'read-only'
+    assert start['sandbox'] == 'workspace-write'
+    thread_id = agent._thread_id
     rpc.requests.clear()
-    agent.writes = 'allow'
-    [e async for e in agent.chat([{'role': 'user', 'content': 'b'}], model='future-model', resume={'id': 't', 'synced': 0})]
+    [e async for e in agent.chat([{'role': 'user', 'content': 'b'}], model='future-model', resume={'id': thread_id, 'synced': 0})]
     methods = [m for m, _ in rpc.requests]
-    assert 'thread/resume' in methods, 'a mode change re-opens the thread with the new sandbox'
-    resumed = next(p for m, p in rpc.requests if m == 'thread/resume')
-    assert resumed['sandbox'] == 'workspace-write'
+    assert 'thread/start' not in methods and 'thread/resume' not in methods, 'the open thread is reused without re-opening'

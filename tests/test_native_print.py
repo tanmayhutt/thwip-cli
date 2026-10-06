@@ -6,27 +6,71 @@ import json
 import pytest
 
 from thwip.agents import AgentRegistry
-from thwip.agents.base import AgentDone, LimitHit, LimitStatus, NativeActivity, TextDelta, ThinkingDelta
+from thwip.agents.base import (
+    AgentDone,
+    LimitHit,
+    LimitStatus,
+    NativeActivity,
+    NativePermission,
+    TextDelta,
+    ThinkingDelta,
+)
 from thwip.agents.native_common import build_native_prompt, classify_limit, scrub
 from thwip.agents.native_print import PrintAgent
 from thwip.config import ThwipConfig
 
 
+class FakeStdin:
+    """Records what thwip writes to the CLI. In kept-open mode each user message releases the next batch of output."""
+
+    def __init__(self, process):
+        self.process = process
+        self.written = []
+        self.closed = False
+
+    def write(self, data):
+        payload = json.loads(data.decode())
+        self.written.append(payload)
+        if self.process.keep_open and (payload.get("event") == "user" or payload.get("type") == "user"):
+            self.process.feed_next()
+
+    async def drain(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
 class FakeProcess:
-    def __init__(self, lines, returncode=0, stderr=b""):
+    def __init__(self, lines, returncode=0, stderr=b"", keep_open=False):
+        # `lines` is one batch (a list of events) or, for kept-open mode, a list of batches, one per turn.
+        if keep_open and lines and isinstance(lines[0], dict):
+            lines = [lines]   # a single batch
+        self.batches = list(lines) if keep_open else [lines]
+        self.keep_open = keep_open
         self.stdout = asyncio.StreamReader()
-        for line in lines:
-            self.stdout.feed_data((json.dumps(line) if not isinstance(line, (bytes, str)) else line).encode()
-                                  if not isinstance(line, bytes) else line)
-            self.stdout.feed_data(b"\n")
-        self.stdout.feed_eof()
+        if not keep_open:
+            self.feed_next()
+            self.stdout.feed_eof()
         self.stderr = asyncio.StreamReader()
         self.stderr.feed_data(stderr)
         self.stderr.feed_eof()
+        self.stdin = FakeStdin(self)
         self.returncode = None
         self._code = returncode
         self.killed = False
         self.pid = 4242
+
+    def feed_next(self):
+        if not self.batches:
+            return
+        for line in self.batches.pop(0):
+            self.stdout.feed_data((json.dumps(line) if not isinstance(line, (bytes, str)) else line).encode()
+                                  if not isinstance(line, bytes) else line)
+            self.stdout.feed_data(b"\n")
+
+    def user_messages(self):
+        return [m["message"]["content"] for m in self.stdin.written if m.get("event") == "user" or m.get("type") == "user"]
 
     async def wait(self):
         self.returncode = self._code
@@ -34,14 +78,22 @@ class FakeProcess:
 
 
 def install_fake(monkeypatch, agent, lines, returncode=0, stderr=b""):
+    """Fake the CLI process. `calls` collects (command, process) per start."""
     calls = []
+    keep_open = agent.name == "google"
 
-    async def start(command, stdin_text=None):
-        calls.append((command, stdin_text))
-        return FakeProcess(lines, returncode, stderr)
+    async def start(command, stdin_open=False):
+        process = FakeProcess(lines, returncode, stderr, keep_open=keep_open)
+        calls.append((command, process))
+        return process
 
     monkeypatch.setattr(agent, "_start_process", start)
-    monkeypatch.setattr("thwip.agents.native_print.terminate_process_tree", lambda process: setattr(process, "killed", True))
+
+    def kill(process):
+        process.killed = True
+        process.returncode = process._code
+
+    monkeypatch.setattr("thwip.agents.native_print.terminate_process_tree", kill)
     return calls
 
 
@@ -93,11 +145,31 @@ async def test_claude_streams_text_and_reports_usage(monkeypatch):
     assert any(isinstance(e, NativeActivity) and "Read" in e.description for e in events)
     done = events[-1]
     assert isinstance(done, AgentDone) and (done.usage.input_tokens, done.usage.output_tokens) == (12, 4)
-    command, stdin_text = calls[0]
-    assert stdin_text == "hello" and "--model" in command and command[command.index("--model") + 1] == "fable"
-    assert "--append-system-prompt" in command and "--dangerously-skip-permissions" not in command
-    allowed = command[command.index("--allowedTools") + 1]
-    assert "Read(./**)" in allowed and "Grep(./**)" in allowed and "Glob(./**)" in allowed, "reads are confined to the project"
+    command, process = calls[0]
+    assert process.user_messages() == ["hello"] and command[command.index("--model") + 1] == "fable"
+    assert process.stdin.written[0]["request"]["subtype"] == "initialize", "the handshake that routes questions over the stream"
+    assert "--append-system-prompt" in command and command[command.index("--permission-prompt-tool") + 1] == "stdio"
+    assert "--allowedTools" not in command and "--dangerously-skip-permissions" not in command, "Claude Code keeps its own tools and settings"
+
+
+@pytest.mark.asyncio
+async def test_claude_permission_questions_are_relayed(monkeypatch):
+    agent = PrintAgent("claude", ".")
+    question = {"type": "control_request", "request_id": "req-1", "request": {
+        "subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "rm -f build.log"}}}
+    done = {"type": "result", "subtype": "success", "result": "done", "usage": {}}
+    for approve in (True, False):
+        calls = install_fake(monkeypatch, agent, [question, done])
+        events = []
+        async for event in agent.chat([{"role": "user", "content": "clean up"}], model="fable"):
+            if isinstance(event, NativePermission):
+                assert "Claude Code wants to use Bash" in event.description and "rm -f build.log" in event.description
+                event.approved = approve
+            events.append(event)
+        assert any(isinstance(e, NativePermission) for e in events) and isinstance(events[-1], AgentDone)
+        reply = next(m for m in calls[0][1].stdin.written if m.get("type") == "control_response")
+        assert reply["response"]["request_id"] == "req-1"
+        assert reply["response"]["response"]["behavior"] == ("allow" if approve else "deny")
 
 
 @pytest.mark.asyncio
@@ -149,9 +221,13 @@ async def test_antigravity_stream_and_result(monkeypatch):
     assert [e.content for e in events if isinstance(e, TextDelta)] == ["pong"]
     assert any(isinstance(e, NativeActivity) and "view_file" in e.description for e in events)
     assert isinstance(events[-1], AgentDone) and events[-1].usage.input_tokens == 7
-    command, stdin_text = calls[0]
-    assert stdin_text is None and command[:2] == ["--print", "Conversation instructions:\nBe brief.\n\nhello"]
-    assert "--dangerously-skip-permissions" not in command
+    command, process = calls[0]
+    assert "--print=" in command and command[command.index("--input-format") + 1] == "stream-json"
+    assert process.user_messages() == ["Conversation instructions:\nBe brief.\n\nhello"]
+    assert "--dangerously-skip-permissions" not in command and "--mode" not in command
+    assert agent._kept is not None and agent._kept.alive(), "Antigravity stays open between turns"
+    await agent.close()
+    assert process.killed and agent._kept is None
 
 
 @pytest.mark.asyncio
@@ -244,47 +320,50 @@ async def test_claude_new_session_id_then_resume_flag(monkeypatch):
                                               {"type": "result", "subtype": "success", "result": "hi", "usage": {}}])
     events = await collect(agent)
     assert events[-1].native_session == {"id": "abc-123"}
-    command, stdin_text = calls[0]
+    command, process = calls[0]
     assert "--session-id" in command and "--resume" not in command and "--append-system-prompt" in command
-    assert stdin_text == "hello"
+    assert process.user_messages() == ["hello"]
     # Resume: only the new message, no system prompt re-sent, --resume flag used.
     calls.clear()
     history = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}, {"role": "user", "content": "next"}]
     events = [e async for e in agent.chat(history, model="fable", system_prompt="Be brief.", resume={"id": "abc-123", "synced": 2})]
-    command, stdin_text = calls[0]
+    command, process = calls[0]
     assert command[command.index("--resume") + 1] == "abc-123" and "--append-system-prompt" not in command
-    assert stdin_text == "next" and events[-1].native_session == {"id": "abc-123"}
+    assert process.user_messages() == ["next"] and events[-1].native_session == {"id": "abc-123"}
 
 
 @pytest.mark.asyncio
-async def test_antigravity_conversation_resume_and_fallback(monkeypatch):
+async def test_antigravity_conversation_is_kept_open_and_falls_back(monkeypatch):
     agent = PrintAgent("google", ".")
-    ok = [{"event": "init", "conversation_id": "conv-1", "init": {}},
-          {"event": "result", "result": {"status": "SUCCESS", "response": "hi", "usage": {}}}]
-    calls = install_fake(monkeypatch, agent, ok)
+    turn1 = [{"event": "init", "conversation_id": "conv-1", "init": {}},
+             {"event": "result", "result": {"status": "SUCCESS", "response": "hi", "usage": {}}}]
+    turn2 = [{"event": "result", "result": {"status": "SUCCESS", "response": "again", "usage": {}}}]
+    calls = install_fake(monkeypatch, agent, [turn1, turn2])
     events = await collect(agent, model="gemini-3.8-flash-high")
     assert events[-1].native_session == {"id": "conv-1"} and "--conversation" not in calls[0][0]
 
-    # Resumed turn passes --conversation and only the new text.
-    calls.clear()
+    # The resumed turn reuses the open process: no new start, only the new text is sent.
     history = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}, {"role": "user", "content": "next"}]
     events = [e async for e in agent.chat(history, model="gemini-3.8-flash-high", resume={"id": "conv-1", "synced": 2})]
-    command = calls[0][0]
-    assert command[command.index("--conversation") + 1] == "conv-1" and command[command.index("--print") + 1] == "next"
+    assert len(calls) == 1 and calls[0][1].user_messages()[-1] == "next"
+    assert [e.content for e in events if isinstance(e, TextDelta)] == ["again"]
 
-    # If the resumed process fails, a fresh conversation gets the full transcript.
+    # After a restart (no open process), the conversation is resumed by ID; if that fails, a fresh one gets the transcript.
+    await agent.close()
     attempts = []
-    async def start(command, stdin_text=None):
+    async def start(command, stdin_open=False):
         attempts.append(command)
         if "--conversation" in command:
-            return FakeProcess([{"event": "result", "result": {"status": "ERROR", "error": "conversation not found"}}])
-        return FakeProcess(ok)
+            return FakeProcess([[{"event": "result", "result": {"status": "ERROR", "error": "conversation not found"}}]], keep_open=True)
+        return FakeProcess([[{"event": "init", "conversation_id": "conv-2", "init": {}},
+                             {"event": "result", "result": {"status": "SUCCESS", "response": "fresh", "usage": {}}}]], keep_open=True)
     monkeypatch.setattr(agent, "_start_process", start)
     events = [e async for e in agent.chat(history, model="gemini-3.8-flash-high", resume={"id": "conv-1", "synced": 2})]
-    assert len(attempts) == 2 and "--conversation" not in attempts[1]
-    assert "[User]\nhello" in attempts[1][attempts[1].index("--print") + 1]
+    assert len(attempts) == 2 and attempts[0][attempts[0].index("--conversation") + 1] == "conv-1" and "--conversation" not in attempts[1]
+    assert "[User]\nhello" in agent._kept.process.user_messages()[0]
     assert any(isinstance(e, NativeActivity) and "unavailable" in e.description for e in events)
-    assert events[-1].native_session == {"id": "conv-1"}
+    assert events[-1].native_session == {"id": "conv-2"}
+    await agent.close()
 
 
 @pytest.mark.asyncio
@@ -294,26 +373,20 @@ async def test_antigravity_empty_answer_surfaces_the_denied_permission(monkeypat
                  stderr=b"jetski: no output produced \xe2\x80\x94 a tool required the write_file permission that headless mode cannot prompt for, so it was auto-denied.")
     events = await collect(agent, model="gemini-3.8-flash-high")
     texts = [e.content for e in events if isinstance(e, TextDelta)]
-    assert texts and "needed a tool permission" in texts[0] and "read-only" in texts[0]
+    assert texts and "needed a tool permission" in texts[0] and "skip-permissions" in texts[0]
     assert isinstance(events[-1], AgentDone)
+    await agent.close()
 
 
 @pytest.mark.asyncio
-async def test_write_mode_changes_cli_flags(monkeypatch):
+async def test_thwip_adds_no_restrictions_of_its_own(monkeypatch):
     claude = PrintAgent("claude", ".")
     calls = install_fake(monkeypatch, claude, [{"type": "result", "subtype": "success", "result": "ok", "usage": {}}])
     await collect(claude)
-    assert "Edit(./**)" not in calls[0][0][calls[0][0].index("--allowedTools") + 1], "deny mode: read-only tools"
-    claude.writes = "allow"
-    calls.clear()
-    await collect(claude)
-    allowed = calls[0][0][calls[0][0].index("--allowedTools") + 1]
-    assert "Edit(./**)" in allowed and "Write(./**)" in allowed and "Read(./**)" in allowed
+    command = calls[0][0]
+    assert not any(flag.startswith(("--allowedTools", "--disallowedTools", "--permission-mode")) for flag in command)
     agy = PrintAgent("google", ".")
-    calls = install_fake(monkeypatch, agy, [{"event": "result", "result": {"status": "SUCCESS", "response": "ok", "usage": {}}}])
+    calls = install_fake(monkeypatch, agy, [[{"event": "result", "result": {"status": "SUCCESS", "response": "ok", "usage": {}}}]])
     await collect(agy, model="gemini-3.8-flash-high")
-    assert "--mode" not in calls[0][0]
-    agy.writes = "allow"
-    calls.clear()
-    await collect(agy, model="gemini-3.8-flash-high")
-    assert calls[0][0][calls[0][0].index("--mode") + 1] == "accept-edits"
+    assert "--mode" not in calls[0][0] and "--sandbox" not in calls[0][0]
+    await agy.close()

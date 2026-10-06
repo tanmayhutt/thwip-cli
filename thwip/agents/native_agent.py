@@ -72,8 +72,6 @@ class NativeAgent(BaseAgent):
         # One long-lived app-server process per Thwip run; threads are resumed across turns.
         self._rpc = None
         self._thread_id: str | None = None
-        self.writes = "deny"   # "allow": workspace-write sandbox (edits inside the project need no approval)
-        self._thread_writes = "deny"
 
     def is_installed(self):
         return shutil.which(self.binary) is not None
@@ -172,22 +170,21 @@ class NativeAgent(BaseAgent):
 
         Returns (thread_id, resumed).
         """
-        sandbox = "workspace-write" if self.writes == "allow" else "read-only"
-        common = {"cwd": self.project, "sandbox": sandbox, "approvalPolicy": "on-request",
+        # Codex keeps the powers it has on its own: its workspace sandbox, and a question (relayed to the thwip
+        # prompt) for anything beyond it. thwip adds no restriction of its own.
+        common = {"cwd": self.project, "sandbox": "workspace-write", "approvalPolicy": "on-request",
                   **({"developerInstructions": system_prompt} if system_prompt else {})}
         if resume_id:
-            if self._thread_id == resume_id and self._thread_writes == self.writes:
+            if self._thread_id == resume_id:
                 return resume_id, True
             try:
                 await rpc.request("thread/resume", {"threadId": resume_id, "model": model, **common})
                 self._thread_id = resume_id
-                self._thread_writes = self.writes
                 return resume_id, True
             except (RuntimeError, TimeoutError, KeyError, TypeError):
                 pass
         session = await rpc.request("thread/start", {"model": model, "ephemeral": False, **common})
         self._thread_id = session["thread"]["id"]
-        self._thread_writes = self.writes
         return self._thread_id, False
 
     async def chat(self, messages, model=None, system_prompt=None, tools=None, stream=True, resume=None, memory_note=""):

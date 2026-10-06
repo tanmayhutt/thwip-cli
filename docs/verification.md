@@ -12,6 +12,9 @@ each using its existing sign-in. No API keys were configured.
 
 | Flow | Result |
 | --- | --- |
+| Native permissions relayed (v1.16.0) | thwip no longer restricts native CLIs. Claude Code: `--permission-prompt-tool stdio` with the stream-json initialize handshake; a Write request appeared as a y/N question in thwip, was approved, and the file was created (live, pty driver). Codex: workspace sandbox, a write inside the project applied with no prompt (live). Antigravity: a `run_command` tool was declined by the CLI itself and thwip printed its stderr explanation (live). |
+| Antigravity kept open (v1.16.0) | One `agy --input-format stream-json` process per conversation. Live through the REPL: 41.1 s first turn, 22.0 s and 23.9 s for the next two; no process left after `/quit`. Startup is 0.5 s; the 12 s before the first model call are account and model-list round trips to Google, which the kept-open process pays once. |
+| Home-folder start (v1.16.0) | From `~` without `--project`, the picker lists projects from saved sessions and scan roots, offers New project and Enter a path; New project creates the folder and `context.md` and switches to it (live, pty driver). Session lists show each session's project. |
 | Startup discovery | All three CLIs connected; live model lists shown (Codex 4 models, Antigravity 14, Claude aliases) |
 | Chat turn per provider | Claude Code, Codex, and Antigravity each answered; text streamed into the Live view |
 | Context across `/switch` | Codex and Antigravity both recalled the answer given by the previous provider |

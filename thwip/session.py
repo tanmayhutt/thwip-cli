@@ -300,6 +300,7 @@ class Session:
                 result.append({
                     "id": data.get("id"),
                     "name": data.get("name", f.stem),
+                    "project": data.get("project_path", ""),
                     "agent": data.get("current_agent"),
                     "model": data.get("current_model"),
                     "messages_count": len(data.get("messages", [])),

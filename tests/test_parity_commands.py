@@ -1,6 +1,7 @@
 """Commands that mirror Codex, Claude Code, and Antigravity REPL flows, tested offline."""
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -203,3 +204,48 @@ def test_man_page_commands(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit) as info:
         cli_module.main(["install-man"])
     assert info.value.code == 0
+
+
+def test_known_projects_come_from_sessions_and_scan_roots(cli, tmp_path, monkeypatch):
+    from thwip.config import MemoryConfig
+
+    (tmp_path / "scan" / "alpha").mkdir(parents=True)
+    (tmp_path / "scan" / "beta").mkdir()
+    (tmp_path / "scan" / "beta" / "context.md").write_text("---\nproject: beta\n---\n")
+    (tmp_path / "scan" / ".hidden").mkdir()
+    recent = tmp_path / "recent"
+    recent.mkdir()
+    Session(project_path=str(recent), current_agent="openai", current_model="alpha").save("older")
+    cli.config.memory = MemoryConfig(scan=[str(tmp_path / "scan")], onboarded=True)
+    known = cli._known_projects()
+    assert known[0] == recent.resolve(), "projects from saved sessions come first"
+    assert {p.name for p in known} == {"recent", "beta", "alpha"}, "hidden folders are skipped, each project listed once"
+    assert all(p != Path.home().resolve() for p in known)
+    listed = Session.list_saved_sessions()
+    assert listed[0]["project"] == str(recent)
+
+
+@pytest.mark.asyncio
+async def test_project_picker_creates_a_project_with_a_context_file(cli, tmp_path, monkeypatch):
+    from thwip.config import MemoryConfig
+
+    parent = tmp_path / "scan"
+    parent.mkdir()
+    cli.config.memory = MemoryConfig(scan=[str(parent)], onboarded=True)
+    monkeypatch.setattr(cli.config, "save", lambda: None)
+    answers(monkeypatch, cli, "1", "demo-app", "")   # 1 = New project when nothing is known yet
+    await cli._choose_project(at_startup=True)
+    target = parent / "demo-app"
+    assert target.is_dir() and (target / "context.md").is_file()
+    assert Path(cli.session.project_path) == target.resolve() and cli.session.native_sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_project_picker_enter_keeps_the_current_project(cli, tmp_path, monkeypatch):
+    from thwip.config import MemoryConfig
+
+    cli.config.memory = MemoryConfig(onboarded=True)
+    answers(monkeypatch, cli, "")
+    before = cli.session.project_path
+    await cli._choose_project()
+    assert cli.session.project_path == before

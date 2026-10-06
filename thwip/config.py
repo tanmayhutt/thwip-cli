@@ -217,11 +217,6 @@ class MemoryConfig:
 
 
 @dataclass
-class NativeConfig:
-    writes: str = "deny"   # "deny": native CLIs run read-only (Codex still asks per write); "allow": project-scoped writes without prompts
-
-
-@dataclass
 class LimitsConfig:
     warn_at_percent: int = 80          # context-size warning (handoff estimate vs the model's window)
     auto_switch: bool = False          # Prompt user vs auto-switch on a limit hit
@@ -260,7 +255,6 @@ class ThwipConfig:
     display: DisplayConfig = field(default_factory=DisplayConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
-    native: NativeConfig = field(default_factory=NativeConfig)
 
     @classmethod
     def load(cls) -> ThwipConfig:
@@ -302,7 +296,6 @@ class ThwipConfig:
                        "compact_at_percent": int, "assumed_context_tokens": int, "keep_recent_messages": int},
             "memory": {"enabled": bool, "file": str, "vault": str, "offer_update_on_quit": bool,
                        "onboarded": bool, "cards_dir": str, "scan": list},
-            "native": {"writes": str},
         }
         clean = {}
         for section, fields in specs.items():
@@ -373,9 +366,6 @@ class ThwipConfig:
             if isinstance(memory.get("scan"), list):
                 self.memory.scan = [str(item) for item in memory["scan"] if isinstance(item, str) and item.strip()]
 
-        native = data.get("native", {})
-        if isinstance(native, dict) and native.get("writes") in {"deny", "allow"}:
-            self.native.writes = native["writes"]
 
         # Endpoint overrides: [endpoints] openai = "https://proxy.example/v1"
         endpoints = data.get("endpoints", {})
@@ -434,7 +424,6 @@ class ThwipConfig:
                 "host": self.ollama_host,
             },
             **({"endpoints": dict(self.endpoints)} if self.endpoints else {}),
-            "native": {"writes": self.native.writes},
             "memory": {
                 "enabled": self.memory.enabled,
                 "file": self.memory.file,

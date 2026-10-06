@@ -21,8 +21,8 @@ for Anthropic, Google, OpenAI, DeepSeek, Groq, OpenRouter, and a local Ollama
 server are also supported.
 .PP
 No credential is copied. Installed CLIs hold their own login, enforce their own
-sandbox and approvals, and bill their own plan. Native connections are read-only
-by default; Codex asks before operations outside its sandbox.
+sandbox and approvals, and bill their own plan. thwip adds no restrictions of its
+own: the questions a CLI would ask you are relayed to the thwip prompt.
 .SH OPTIONS
 .TP
 .BI \-p ", " \-\-project " PATH"
@@ -85,9 +85,13 @@ are shown as a diff and written only after confirmation.
 Your standing instructions for every assistant. thwip imposes no persona; it adds only a short
 neutral note and the relevant project memory.
 .TP
-.B /writes [allow|deny]
-Whether native CLIs may edit files inside the project without a prompt. Default deny: Claude Code and
-Antigravity run read-only and Codex asks before each write.
+.B /project [path]
+Pick a known project, create one, or switch to a path. Sessions remember their project, so thwip can
+run from the home folder; started there, it asks which project to work on.
+.TP
+.B /permissions
+How each native CLI's own permission questions reach you. Codex and Claude Code ask through thwip;
+Antigravity cannot ask in headless mode and declines such tools itself.
 .TP
 .B /recall <words>
 Search earlier turns that compaction archived. Matching turns are also attached automatically when a

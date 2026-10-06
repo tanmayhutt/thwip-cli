@@ -44,17 +44,14 @@ def test_memory_and_endpoint_sections_round_trip(tmp_path, monkeypatch):
     endpoints.configure({})
 
 
-def test_native_writes_round_trip(tmp_path, monkeypatch):
+def test_old_native_section_is_ignored_without_error(tmp_path, monkeypatch):
     import tomllib
 
     from thwip.config import ThwipConfig
 
     monkeypatch.setenv("THWIP_CONFIG_DIR", str(tmp_path))
     config = ThwipConfig()
-    assert config.native.writes == "deny"
     config._apply_toml(tomllib.loads('[native]\nwrites = "allow"\n'))
-    assert config.native.writes == "allow"
-    config._apply_toml(tomllib.loads('[native]\nwrites = "whatever"\n'))
-    assert config.native.writes == "allow", "unknown values are ignored"
+    assert not hasattr(config, "native"), "thwip no longer restricts native CLIs, so there is nothing to configure"
     config.save()
-    assert ThwipConfig.load().native.writes == "allow"
+    ThwipConfig.load()

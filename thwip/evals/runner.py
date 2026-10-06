@@ -78,11 +78,8 @@ async def run_task(agent, task: EvalTask, model: str | None = None, memory_mode:
     started = time.perf_counter()
     # Native CLIs resolve files against their own working directory, so point them at the fixture.
     previous_project = getattr(agent, "project", None)
-    previous_writes = getattr(agent, "writes", None)
     if previous_project is not None:
         agent.project = str(project)
-    if previous_writes is not None:
-        agent.writes = "allow" if task.allow_writes else "deny"
     try:
         if task.kind == "system":
             result.passed, result.note = task.check(observation, {"tool_manager": manager, "project": project})
@@ -146,7 +143,7 @@ async def run_task(agent, task: EvalTask, model: str | None = None, memory_mode:
                 elif isinstance(event, NativeActivity):
                     result.native_activity += 1
                 elif isinstance(event, NativePermission):
-                    # No human in the harness: approve only for tasks that explicitly allow writes in their fixture folder.
+                    # No human in the harness: approve relayed CLI questions only for tasks that allow writes in their fixture.
                     event.approved = bool(task.allow_writes)
                 elif isinstance(event, AgentDone):
                     result.input_tokens += event.usage.input_tokens
@@ -190,8 +187,6 @@ async def run_task(agent, task: EvalTask, model: str | None = None, memory_mode:
                                      input_tokens=result.input_tokens, output_tokens=result.output_tokens, cost_usd=result.cost_usd,
                                      tool_calls=result.tool_calls, rounds=result.rounds, native=bool(getattr(agent, "native_tools", False)),
                                      session=f"eval:{task.id}", error=result.error))
-        if previous_writes is not None:
-            agent.writes = previous_writes
         if previous_project is not None:
             closer = getattr(agent, "close", None)
             if callable(closer):
