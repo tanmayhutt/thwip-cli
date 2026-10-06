@@ -249,3 +249,21 @@ async def test_project_picker_enter_keeps_the_current_project(cli, tmp_path, mon
     before = cli.session.project_path
     await cli._choose_project()
     assert cli.session.project_path == before
+
+
+@pytest.mark.asyncio
+async def test_cli_wording_aliases_map_to_thwip_commands(cli, monkeypatch):
+    """The same job has different names across CLIs; thwip accepts each one."""
+    seen = []
+    monkeypatch.setattr(cli, "cmd_list_sessions", lambda: seen.append("sessions"))
+    monkeypatch.setattr(cli, "cmd_permissions", lambda: seen.append("permissions"))
+    monkeypatch.setattr(cli, "cmd_show_agents", lambda: seen.append("agents"))
+    async def resume(name=""):
+        seen.append(f"resume:{name}")
+    async def memory(sub="", rest=""):
+        seen.append(f"memory:{sub}")
+    monkeypatch.setattr(cli, "cmd_resume", resume)
+    monkeypatch.setattr(cli, "cmd_memory", memory)
+    for line in ("/sessions", "/approvals", "/clis", "/continue 2", "/init"):
+        await cli.handle_command(line)
+    assert seen == ["sessions", "permissions", "agents", "resume:2", "memory:init"]

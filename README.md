@@ -181,7 +181,8 @@ notes are never touched.
 | Command | Action |
 |:---|:---|
 | `/prompt [show|set|reset|save]` | Your standing instructions for every assistant; thwip adds only a neutral note |
-| `/permissions` | How each native CLI's own permission questions reach you |
+| `/permissions` (`/approvals`) | How each native CLI's own permission questions reach you |
+| `/sessions`, `/continue`, `/init`, `/context`, `/clis` | Aliases for the names Codex, Claude Code and Antigravity use for the same jobs (`/session list`, `/resume`, `/memory init`, `/status`, `/agents`) |
 | `/project [path]` | Pick a known project, create one, or switch to a path; sessions remember their project |
 | `/recall <words>` | Search earlier turns that compaction archived |
 | `/trace [n]` | Recent request traces with a per-provider summary |

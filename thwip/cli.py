@@ -404,7 +404,7 @@ class ThwipCLI:
         elif cmd == "/native":
             await self.cmd_native(arg1, arg2)
 
-        elif cmd in ("/agents", "/list", "/a"):
+        elif cmd in ("/agents", "/clis", "/list", "/a"):
             self.cmd_show_agents()
 
         elif cmd in ("/key", "/auth", "/config", "/k"):
@@ -424,7 +424,7 @@ class ThwipCLI:
         elif cmd in ("/tools", "/t"):
             self.cmd_show_tools()
 
-        elif cmd == "/status":
+        elif cmd in ("/status", "/context"):   # Claude Code calls the context view /context
             self.cmd_show_status()
 
         elif cmd in ("/limits", "/usage"):
@@ -436,8 +436,14 @@ class ThwipCLI:
         elif cmd == "/new":
             self.cmd_new()
 
-        elif cmd == "/resume":
+        elif cmd in ("/resume", "/continue"):   # Antigravity calls it --continue
             await self.cmd_resume(arg1)
+
+        elif cmd == "/sessions":
+            self.cmd_list_sessions()
+
+        elif cmd == "/init":   # Codex and Claude Code: create the project memory file
+            await self.cmd_memory("init", cmd_line.partition(" ")[2].strip())
 
         elif cmd == "/compact":
             await self.cmd_compact()
@@ -451,7 +457,7 @@ class ThwipCLI:
         elif cmd == "/export":
             self.cmd_export(cmd_line.partition(" ")[2].strip())
 
-        elif cmd == "/permissions":
+        elif cmd in ("/permissions", "/approvals"):   # Codex calls it /approvals
             self.cmd_permissions()
 
         elif cmd == "/recall":
@@ -1237,7 +1243,7 @@ class ThwipCLI:
             ("/switch [agent] [model]", "Switch provider with a text-continuity report"),
             ("/handoff [agent] [model]", "Preview transfer losses and context pressure without switching"),
             ("/native codex", "Save and leave Thwip for Codex using its own login; no context transfer"),
-            ("/agents", "Show all detected coding agents, company status & capabilities"),
+            ("/agents (/clis)", "Show every detected CLI, its status and capabilities"),
             ("/models [agent|tier]", "List models filtered by provider or tier (flagship, balanced, fast)"),
             ("/key [provider]", "Securely enter an API key without storing it in terminal history"),
             ("/tools", "List all universal file, terminal, and git tools"),
@@ -1245,7 +1251,7 @@ class ThwipCLI:
             ("/limits", "View token usage, quota, and spend metrics"),
             ("/detect", "Re-scan system for newly installed coding agents"),
             ("/model [id]", "Pick a model for the current agent (interactive list or ID)"),
-            ("/new", "Start a fresh conversation (current one is saved first)"),
+            ("/new", "Start a fresh conversation (current one is saved first); /clear also works"),
             ("/resume [name]", "Resume a saved session from a numbered list"),
             ("/compact", "Summarize older turns on another provider; recent turns stay verbatim"),
             ("/diff [staged]", "Show the project's git diff"),
@@ -1257,7 +1263,7 @@ class ThwipCLI:
             ("/permissions", "How each native CLI's own permission questions reach you"),
             ("/recall <words>", "Search earlier turns that compaction summarized away"),
             ("/trace [n]", "Recent request traces: latency, tokens, cost, tool calls, errors per provider"),
-            ("/memory [show|init|edit|update|sync|vault|link]", "Project memory file shared by every agent, filed into your second-brain vault"),
+            ("/memory [show|init|edit|update|sync|vault|link]", "Project memory file shared by every CLI, filed into your second-brain vault; /init is a shortcut for /memory init"),
             ("/session save [name]", "Save current chat session"),
             ("/session load <name>", "Load a previously saved session"),
             ("/session list", "List all saved sessions"),
