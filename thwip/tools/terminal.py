@@ -17,8 +17,10 @@ def terminate_process_tree(proc) -> None:
         if os.name == "posix":
             os.killpg(proc.pid, signal.SIGKILL)
         else:
+            # Windows has no process groups to signal; taskkill /T takes the children down with the parent.
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
             proc.kill()
-    except ProcessLookupError:
+    except (ProcessLookupError, OSError):
         pass
 
 

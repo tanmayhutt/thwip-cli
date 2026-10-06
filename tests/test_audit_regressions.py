@@ -1,4 +1,5 @@
 import json
+import os
 from io import StringIO
 from types import SimpleNamespace
 
@@ -76,7 +77,7 @@ async def test_project_path_with_spaces(cli, tmp_path):
 
 def test_usage_file_private(cli):
     cli.usage_tracker.record_usage('openai', 'gpt-5.6-terra', 10, 5)
-    assert get_usage_path().stat().st_mode & 0o777 == 0o600
+    assert os.name != "posix" or get_usage_path().stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize('tool,args', [

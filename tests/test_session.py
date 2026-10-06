@@ -5,6 +5,7 @@ Unit tests for thwip session persistence and cross-agent context portability.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -98,7 +99,7 @@ def test_session_serialization(tmp_path, monkeypatch):
     assert loaded.project_path == "/tmp/test"
     assert len(loaded.messages) == 2
     assert loaded.messages[1].agent_name == "openai"
-    assert saved_path.stat().st_mode & 0o777 == 0o600
+    assert os.name != "posix" or saved_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_session_name_cannot_escape_config_dir(tmp_path, monkeypatch):
@@ -127,7 +128,7 @@ def test_config_file_permissions_and_source_are_preserved(tmp_path, monkeypatch)
     loaded = ThwipConfig.load()
 
     assert loaded.key_sources["openai"] == "config.toml"
-    assert get_config_path().stat().st_mode & 0o777 == 0o600
+    assert os.name != "posix" or get_config_path().stat().st_mode & 0o777 == 0o600
 
 
 def test_native_sessions_are_tracked_validated_and_persisted(tmp_path, monkeypatch):

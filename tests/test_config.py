@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 
 from thwip.config import ThwipConfig
@@ -18,7 +19,7 @@ def test_save_does_not_persist_environment_or_discovered_keys(tmp_path, monkeypa
 
     data = tomllib.loads((tmp_path / "config.toml").read_text())
     assert data["keys"] == {"anthropic": "explicit"}
-    assert (tmp_path / "config.toml").stat().st_mode & 0o777 == 0o600
+    assert os.name != "posix" or (tmp_path / "config.toml").stat().st_mode & 0o777 == 0o600
 
 
 def test_memory_and_endpoint_sections_round_trip(tmp_path, monkeypatch):

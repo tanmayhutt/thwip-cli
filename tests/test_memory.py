@@ -1,6 +1,7 @@
 """Project memory file, vault filing with cross-project links, onboarding, and model-driven updates."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -57,7 +58,7 @@ def test_vault_sync_files_cards_hubs_and_related_links(tmp_path):
             f"---\nproject: {folder.name}\npurpose: {folder.name} tool\narea: Developer Tools\nstatus: active\n"
             f"updated: 2026-09-24\nstack: [Python, {extra}]\ntags: [cli]\n---\n\n# {folder.name} Context\n")
     report = vault.sync(ProjectMemory(str(alpha)))
-    assert any(path.endswith("Projects/alpha.md") for path in report["written"])
+    assert any(Path(path).as_posix().endswith("Projects/alpha.md") for path in report["written"])
     card = (vault.root / "Projects" / "alpha.md").read_text()
     assert "generated_by: thwip" in card and "None yet" in card
     report = vault.sync(ProjectMemory(str(beta)))

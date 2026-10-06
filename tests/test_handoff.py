@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import os
 from copy import deepcopy
 from io import StringIO
 from types import SimpleNamespace
@@ -115,7 +116,7 @@ def test_tracking_survives_save_and_legacy_load(tmp_path, monkeypatch):
     loaded = Session.load("tracking")
     assert loaded.observed_tool_results == 1
     assert loaded.tool_tracking_complete
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert os.name != "posix" or path.stat().st_mode & 0o777 == 0o600
     data = json.loads(path.read_text())
     del data["observed_tool_results"]
     del data["tool_tracking_complete"]

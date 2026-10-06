@@ -103,7 +103,7 @@ async def test_new_saves_previous_and_resume_restores_it(cli, monkeypatch):
     first = Session.list_saved_sessions()[0]["name"]
     await cli.cmd_resume("1")
     assert cli.session.name == first, "/resume 1 picks the first listed session"
-    assert cli.session.project_path.startswith("/"), "loaded project path is absolute"
+    assert Path(cli.session.project_path).is_absolute(), "loaded project path is absolute"
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import time
 from types import SimpleNamespace
 
@@ -157,6 +158,7 @@ async def test_google_preserves_thought_signature():
     assert captured[-1]["contents"][0].parts[0].thought_signature == b"opaque-signature"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX shell syntax and process groups")
 def test_sync_timeout_stops_child_writes(tmp_path):
     runner = TerminalRunner(tmp_path)
     result = runner.run_command("sleep 0.3; printf unwanted > late.txt", timeout=0.03)
@@ -166,6 +168,7 @@ def test_sync_timeout_stops_child_writes(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix", reason="POSIX shell syntax and process groups")
 async def test_async_cancellation_stops_child_writes(tmp_path):
     runner = TerminalRunner(tmp_path)
     task = asyncio.create_task(runner.run_command_async("sleep 0.3; printf unwanted > late.txt"))

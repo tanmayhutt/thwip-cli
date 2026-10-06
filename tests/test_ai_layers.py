@@ -1,6 +1,7 @@
 """Tracing, structured outputs with repair, output guardrails, recall over archived turns."""
 
 import json
+import os
 
 import pytest
 
@@ -23,7 +24,7 @@ def test_tracing_records_and_summarizes(tmp_path, monkeypatch):
     summary = tracing.summarize(rows)
     assert summary["openai"] == {"requests": 2, "input_tokens": 30, "output_tokens": 10, "cost_usd": 0.01, "errors": 1,
                                  "tool_calls": 0, "mean_latency_s": 3.0}
-    assert oct((tmp_path / "traces.jsonl").stat().st_mode)[-3:] == "600"
+    assert os.name != "posix" or oct((tmp_path / "traces.jsonl").stat().st_mode)[-3:] == "600"
     (tmp_path / "traces.jsonl").write_text("not json\n" + (tmp_path / "traces.jsonl").read_text())
     assert len(tracing.tail(10)) == 3, "a corrupt line is skipped"
 
